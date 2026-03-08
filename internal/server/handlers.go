@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 
 	"github.com/alanaktion/lilath/internal/auth"
 	"github.com/alanaktion/lilath/internal/config"
@@ -70,9 +71,9 @@ func (h *Handlers) ForwardAuth(w http.ResponseWriter, r *http.Request) {
 
 	var loginURL string
 	if proto != "" && host != "" {
-		loginURL = proto + "://" + host + "/login?rd=" + originalURI
+		loginURL = proto + "://" + host + "/login?rd=" + url.QueryEscape(originalURI)
 	} else {
-		loginURL = "/login?rd=" + originalURI
+		loginURL = "/login?rd=" + url.QueryEscape(originalURI)
 	}
 
 	http.Redirect(w, r, loginURL, http.StatusFound)
