@@ -1,0 +1,27 @@
+# lilath configuration
+# All fields are optional — values shown are defaults.
+
+# Address and port to listen on.
+listen_addr: ":8080"
+
+# Path to the credentials file (username:bcrypt_hash, one per line).
+credentials_file: "users.txt"
+
+# IP allowlist. Requests from matching IPs bypass credential auth entirely.
+# Supports individual IPs and CIDR ranges. Leave empty to disable IP allowlisting.
+ip_allowlist:
+  - "127.0.0.1"
+  - "::1"
+  # - "10.0.0.0/8"
+  # - "192.168.1.50"
+
+# Session settings.
+session_ttl_minutes: 60
+cookie_name: "lilath_session"
+
+# Set cookie_secure to false only when testing over plain HTTP.
+cookie_secure: true
+
+# Trust X-Forwarded-For / X-Real-IP headers from Traefik (or another proxy).
+# Disable only if lilath is exposed directly to the internet.
+trust_forwarded_for: true
