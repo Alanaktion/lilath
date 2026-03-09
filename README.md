@@ -99,21 +99,34 @@ docker kill --signal=HUP lilath
 
 ### 3. Configure
 
+Configuration can be provided via a YAML file, environment variables, or a
+combination of both. Environment variables always take precedence over the
+config file.
+
+#### Config file
+
 ```bash
 cp config.example.yaml config.yaml
 $EDITOR config.yaml
 ```
 
-Key options:
+#### Environment variables
 
-| Field                 | Default     | Description                           |
-| --------------------- | ----------- | ------------------------------------- |
-| `listen_addr`         | `:8080`     | Address/port to bind                  |
-| `credentials_file`    | `users.txt` | Path to credentials file              |
-| `ip_allowlist`        | `[]`        | IPs/CIDRs that skip auth              |
-| `session_ttl_minutes` | `60`        | Session lifetime                      |
-| `cookie_secure`       | `true`      | Set to `false` for plain HTTP testing |
-| `trust_forwarded_for` | `true`      | Read client IP from `X-Forwarded-For` |
+Every config option has a corresponding `LILATH_*` environment variable:
+
+| Environment variable        | Default           | Description                           |
+| --------------------------- | ----------------- | ------------------------------------- |
+| `LILATH_LISTEN_ADDR`        | `:8080`           | Address/port to bind                  |
+| `LILATH_CREDENTIALS_FILE`   | `users.txt`       | Path to credentials file              |
+| `LILATH_IP_ALLOWLIST`       | _(empty)_         | Comma-separated IPs/CIDRs that skip auth |
+| `LILATH_SESSION_SECRET`     | _(empty)_         | Optional session signing secret       |
+| `LILATH_SESSION_TTL_MINUTES`| `60`              | Session lifetime in minutes           |
+| `LILATH_COOKIE_NAME`        | `lilath_session`  | Session cookie name                   |
+| `LILATH_COOKIE_SECURE`      | `true`            | Set to `false` for plain HTTP testing |
+| `LILATH_TRUST_FORWARDED_FOR`| `true`            | Read client IP from `X-Forwarded-For` |
+
+Boolean variables accept `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`.
+`LILATH_IP_ALLOWLIST` accepts a comma-separated list (e.g. `127.0.0.1,10.0.0.0/8`).
 
 ### 4. Run
 
@@ -159,6 +172,9 @@ http:
 
 ### Docker Compose example
 
+The example below uses environment variables so no config file mount is needed.
+The only required volume is the credentials file.
+
 ```yaml
 services:
   traefik:
@@ -173,9 +189,15 @@ services:
 
   lilath:
     image: lilath   # build your own
+    environment:
+      LILATH_CREDENTIALS_FILE: /data/users.txt
+      LILATH_COOKIE_SECURE: "true"
+      LILATH_TRUST_FORWARDED_FOR: "true"
+      LILATH_SESSION_TTL_MINUTES: "60"
+      # LILATH_IP_ALLOWLIST: "10.0.0.0/8,192.168.0.0/16"
+      # LILATH_SESSION_SECRET: "change-me"
     volumes:
-      - ./config.yaml:/config.yaml
-      - ./users.txt:/users.txt
+      - ./users.txt:/data/users.txt
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.lilath-login.rule=PathPrefix(`/login`) || PathPrefix(`/logout`)"
