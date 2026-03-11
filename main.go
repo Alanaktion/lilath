@@ -33,7 +33,10 @@ func main() {
 
 	sessions := auth.NewSessionStore(cfg.SessionTTL)
 
-	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	if err != nil {
+		log.Fatalf("initializing handlers: %v", err)
+	}
 	srv := server.NewServer(cfg.ListenAddr, h)
 
 	// Reload credentials on SIGHUP without restarting.

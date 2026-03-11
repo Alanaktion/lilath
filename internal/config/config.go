@@ -21,6 +21,9 @@ type Config struct {
 	// TrustForwardedFor controls whether to trust X-Forwarded-For headers.
 	// Enable this when running behind a trusted reverse proxy like Traefik.
 	TrustForwardedFor bool `yaml:"trust_forwarded_for"`
+	// LoginTemplate is an optional path to a custom HTML template file that
+	// replaces the built-in login page. Leave empty to use the default.
+	LoginTemplate string `yaml:"login_template"`
 }
 
 func defaults() *Config {
@@ -68,6 +71,7 @@ func Load(path string) (*Config, error) {
 //	LILATH_BASE_DOMAIN         — e.g. "example.com"
 //	LILATH_COOKIE_SECURE       — "true"/"1"/"yes" or "false"/"0"/"no"
 //	LILATH_TRUST_FORWARDED_FOR — "true"/"1"/"yes" or "false"/"0"/"no"
+//	LILATH_LOGIN_TEMPLATE      — e.g. "/data/login.html"
 func applyEnv(cfg *Config) {
 	if v := os.Getenv("LILATH_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
@@ -99,6 +103,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v, ok := os.LookupEnv("LILATH_TRUST_FORWARDED_FOR"); ok && v != "" {
 		cfg.TrustForwardedFor = parseBool(v)
+	}
+	if v := os.Getenv("LILATH_LOGIN_TEMPLATE"); v != "" {
+		cfg.LoginTemplate = v
 	}
 }
 

@@ -31,3 +31,8 @@ cookie_secure: true
 # Trust X-Forwarded-For / X-Real-IP headers from Traefik (or another proxy).
 # Disable only if lilath is exposed directly to the internet.
 trust_forwarded_for: true
+
+# Optional path to a custom HTML login page template.
+# The template receives .RedirectURL (string) and .Error (string) variables.
+# Leave unset to use the built-in login page.
+# login_template: "/data/login.html"
