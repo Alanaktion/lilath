@@ -23,6 +23,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.CookieName != "lilath_session" {
 		t.Errorf("CookieName: got %q, want %q", cfg.CookieName, "lilath_session")
 	}
+	if cfg.BaseDomain != "" {
+		t.Errorf("BaseDomain: got %q, want empty", cfg.BaseDomain)
+	}
 	if !cfg.CookieSecure {
 		t.Error("CookieSecure: got false, want true")
 	}
@@ -37,6 +40,7 @@ func TestLoad_EnvOverridesDefaults(t *testing.T) {
 	t.Setenv("LILATH_SESSION_SECRET", "mysecret")
 	t.Setenv("LILATH_SESSION_TTL_MINUTES", "120")
 	t.Setenv("LILATH_COOKIE_NAME", "my_cookie")
+	t.Setenv("LILATH_BASE_DOMAIN", "example.com")
 	t.Setenv("LILATH_COOKIE_SECURE", "false")
 	t.Setenv("LILATH_TRUST_FORWARDED_FOR", "false")
 	t.Setenv("LILATH_IP_ALLOWLIST", "127.0.0.1, 10.0.0.0/8")
@@ -60,6 +64,9 @@ func TestLoad_EnvOverridesDefaults(t *testing.T) {
 	}
 	if cfg.CookieName != "my_cookie" {
 		t.Errorf("CookieName: got %q, want %q", cfg.CookieName, "my_cookie")
+	}
+	if cfg.BaseDomain != "example.com" {
+		t.Errorf("BaseDomain: got %q, want %q", cfg.BaseDomain, "example.com")
 	}
 	if cfg.CookieSecure {
 		t.Error("CookieSecure: got true, want false")

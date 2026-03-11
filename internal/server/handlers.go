@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/alanaktion/lilath/internal/auth"
 	"github.com/alanaktion/lilath/internal/config"
@@ -64,15 +65,29 @@ func (h *Handlers) ForwardAuth(w http.ResponseWriter, r *http.Request) {
 	if originalURI == "" {
 		originalURI = "/"
 	}
-	// Use the forwarded host/proto for the redirect if available, otherwise
-	// the auth service's own address.
+
 	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		if r.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
 	host := r.Header.Get("X-Forwarded-Host")
 
 	var loginURL string
-	if proto != "" && host != "" {
+	if h.cfg.BaseDomain != "" {
+		rd := originalURI
+		if host != "" && strings.HasPrefix(originalURI, "/") {
+			rd = proto + "://" + host + originalURI
+		}
+		loginURL = proto + "://" + normalizeBaseDomain(h.cfg.BaseDomain) + "/login?rd=" + url.QueryEscape(rd)
+	} else if host != "" {
+		// Use the forwarded host/proto for the redirect when available.
 		loginURL = proto + "://" + host + "/login?rd=" + url.QueryEscape(originalURI)
 	} else {
+		// Fall back to a relative redirect when no forwarded host is available.
 		loginURL = "/login?rd=" + url.QueryEscape(originalURI)
 	}
 
@@ -130,6 +145,7 @@ func (h *Handlers) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 		Name:     h.cfg.CookieName,
 		Value:    sessionID,
 		Path:     "/",
+		Domain:   cookieDomain(h.cfg.BaseDomain),
 		HttpOnly: true,
 		Secure:   h.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -147,9 +163,22 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 		Name:     h.cfg.CookieName,
 		Value:    "",
 		Path:     "/",
+		Domain:   cookieDomain(h.cfg.BaseDomain),
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   h.cfg.CookieSecure,
 	})
 	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+func normalizeBaseDomain(base string) string {
+	return strings.TrimPrefix(strings.TrimSpace(base), ".")
+}
+
+func cookieDomain(base string) string {
+	normalized := normalizeBaseDomain(base)
+	if normalized == "" {
+		return ""
+	}
+	return "." + normalized
 }

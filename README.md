@@ -122,11 +122,15 @@ Every config option has a corresponding `LILATH_*` environment variable:
 | `LILATH_SESSION_SECRET`     | _(empty)_         | Optional session signing secret       |
 | `LILATH_SESSION_TTL_MINUTES`| `60`              | Session lifetime in minutes           |
 | `LILATH_COOKIE_NAME`        | `lilath_session`  | Session cookie name                   |
+| `LILATH_BASE_DOMAIN`        | _(empty)_         | Optional base domain for login/cookie sharing across subdomains |
 | `LILATH_COOKIE_SECURE`      | `true`            | Set to `false` for plain HTTP testing |
 | `LILATH_TRUST_FORWARDED_FOR`| `true`            | Read client IP from `X-Forwarded-For` |
 
 Boolean variables accept `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`.
 `LILATH_IP_ALLOWLIST` accepts a comma-separated list (e.g. `127.0.0.1,10.0.0.0/8`).
+When `LILATH_BASE_DOMAIN` is set (for example `example.com`), unauthenticated
+requests are redirected to that domain's `/login` endpoint and session cookies
+are written with domain `.example.com` so they are sent to subdomains.
 
 ### 4. Run
 

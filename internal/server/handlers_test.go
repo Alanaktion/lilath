@@ -245,6 +245,60 @@ func TestForwardAuth_WithForwardedHostProto(t *testing.T) {
 	}
 }
 
+func TestForwardAuth_WithBaseDomain(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/auth", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "asdf.example.com")
+	req.Header.Set("X-Forwarded-Uri", "/protected?x=1")
+
+	path := filepath.Join(t.TempDir(), "users.txt")
+	hash, err := auth.HashPassword(testPassword)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := auth.WriteCredentials(path, map[string]string{testUser: hash}); err != nil {
+		t.Fatalf("WriteCredentials: %v", err)
+	}
+
+	creds, err := auth.LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+	cfg := &config.Config{
+		CookieName:        cookieName,
+		CookieSecure:      false,
+		SessionTTL:        60,
+		TrustForwardedFor: false,
+		BaseDomain:        "example.com",
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	rr := httptest.NewRecorder()
+	h.ForwardAuth(rr, req)
+	resp := rr.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected %d, got %d", http.StatusFound, resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "https://example.com/login") {
+		t.Fatalf("expected absolute redirect to base domain, got %q", loc)
+	}
+	parsed, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("parsing Location %q: %v", loc, err)
+	}
+	if got := parsed.Query().Get("rd"); got != "https://asdf.example.com/protected?x=1" {
+		t.Fatalf("rd param: expected absolute original URL, got %q", got)
+	}
+
+}
+
 // --------------------------------------------------------------------------
 // GET /login — login page
 // --------------------------------------------------------------------------
@@ -316,6 +370,67 @@ func TestLoginSubmit_ValidCredentials(t *testing.T) {
 	}
 	if sessionCookie.Value == "" {
 		t.Fatal("session cookie value should not be empty")
+	}
+}
+
+func TestLoginSubmit_SetsCookieDomainWithBaseDomain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.txt")
+
+	hash, err := auth.HashPassword(testPassword)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := auth.WriteCredentials(path, map[string]string{testUser: hash}); err != nil {
+		t.Fatalf("WriteCredentials: %v", err)
+	}
+	creds, err := auth.LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+
+	cfg := &config.Config{
+		CookieName:        cookieName,
+		CookieSecure:      false,
+		SessionTTL:        60,
+		TrustForwardedFor: false,
+		BaseDomain:        "example.com",
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+
+	form := url.Values{
+		"username": {testUser},
+		"password": {testPassword},
+		"rd":       {"https://asdf.example.com/"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	h.LoginSubmit(rr, req)
+	resp := rr.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected %d, got %d", http.StatusFound, resp.StatusCode)
+	}
+
+	var sessionCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == cookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("expected session cookie after successful login")
+	}
+	if sessionCookie.Domain != "example.com" {
+		t.Fatalf("cookie domain: expected %q, got %q", "example.com", sessionCookie.Domain)
 	}
 }
 
@@ -483,4 +598,60 @@ func TestLogout_ClearsCookie(t *testing.T) {
 		}
 	}
 	t.Fatal("expected a Set-Cookie header for the session cookie on logout")
+}
+
+func TestLogout_ClearsCookieDomainWithBaseDomain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.txt")
+
+	hash, err := auth.HashPassword(testPassword)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := auth.WriteCredentials(path, map[string]string{testUser: hash}); err != nil {
+		t.Fatalf("WriteCredentials: %v", err)
+	}
+	creds, err := auth.LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+
+	cfg := &config.Config{
+		CookieName:        cookieName,
+		CookieSecure:      false,
+		SessionTTL:        60,
+		TrustForwardedFor: false,
+		BaseDomain:        "example.com",
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+
+	req := httptest.NewRequest(http.MethodGet, "/logout", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	rr := httptest.NewRecorder()
+
+	h.Logout(rr, req)
+	resp := rr.Result()
+	defer resp.Body.Close()
+
+	var cleared *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == cookieName {
+			cleared = c
+			break
+		}
+	}
+	if cleared == nil {
+		t.Fatal("expected a Set-Cookie header for the session cookie on logout")
+	}
+	if cleared.Domain != "example.com" {
+		t.Fatalf("cookie domain: expected %q, got %q", "example.com", cleared.Domain)
+	}
 }

@@ -16,6 +16,7 @@ type Config struct {
 	SessionSecret   string   `yaml:"session_secret"`
 	SessionTTL      int      `yaml:"session_ttl_minutes"`
 	CookieName      string   `yaml:"cookie_name"`
+	BaseDomain      string   `yaml:"base_domain"`
 	CookieSecure    bool     `yaml:"cookie_secure"`
 	// TrustForwardedFor controls whether to trust X-Forwarded-For headers.
 	// Enable this when running behind a trusted reverse proxy like Traefik.
@@ -64,6 +65,7 @@ func Load(path string) (*Config, error) {
 //	LILATH_SESSION_SECRET      — arbitrary string
 //	LILATH_SESSION_TTL_MINUTES — integer, e.g. "60"
 //	LILATH_COOKIE_NAME         — e.g. "lilath_session"
+//	LILATH_BASE_DOMAIN         — e.g. "example.com"
 //	LILATH_COOKIE_SECURE       — "true"/"1"/"yes" or "false"/"0"/"no"
 //	LILATH_TRUST_FORWARDED_FOR — "true"/"1"/"yes" or "false"/"0"/"no"
 func applyEnv(cfg *Config) {
@@ -88,6 +90,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LILATH_COOKIE_NAME"); v != "" {
 		cfg.CookieName = v
+	}
+	if v := os.Getenv("LILATH_BASE_DOMAIN"); v != "" {
+		cfg.BaseDomain = v
 	}
 	if v, ok := os.LookupEnv("LILATH_COOKIE_SECURE"); ok && v != "" {
 		cfg.CookieSecure = parseBool(v)
