@@ -1,9 +1,11 @@
 package server_test
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,7 +55,10 @@ func newTestServer(t *testing.T) (*httptest.Server, *auth.Credentials) {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
 
-	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
 	srv := server.NewServer(":0", h)
 
 	ts := httptest.NewServer(srv.Handler)
@@ -199,7 +204,10 @@ func TestForwardAuth_IPAllowlist(t *testing.T) {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
 
-	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
 	srv := server.NewServer(":0", h)
 	ts := httptest.NewServer(srv.Handler)
 	t.Cleanup(ts.Close)
@@ -276,7 +284,10 @@ func TestForwardAuth_WithBaseDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
-	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
 	rr := httptest.NewRecorder()
 	h.ForwardAuth(rr, req)
 	resp := rr.Result()
@@ -400,7 +411,10 @@ func TestLoginSubmit_SetsCookieDomainWithBaseDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
-	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
 
 	form := url.Values{
 		"username": {testUser},
@@ -631,7 +645,10 @@ func TestLogout_ClearsCookieDomainWithBaseDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
-	h := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/logout", nil)
 	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
@@ -654,4 +671,81 @@ func TestLogout_ClearsCookieDomainWithBaseDomain(t *testing.T) {
 	if cleared.Domain != "example.com" {
 		t.Fatalf("cookie domain: expected %q, got %q", "example.com", cleared.Domain)
 	}
+}
+
+// --------------------------------------------------------------------------
+// Custom login template
+// --------------------------------------------------------------------------
+
+func TestLoginPage_CustomTemplate(t *testing.T) {
+dir := t.TempDir()
+
+// Write a minimal custom template.
+tmplPath := filepath.Join(dir, "custom-login.html")
+if err := os.WriteFile(tmplPath, []byte(`<!DOCTYPE html><html><body id="custom">{{.RedirectURL}}</body></html>`), 0600); err != nil {
+t.Fatalf("WriteFile: %v", err)
+}
+
+path := filepath.Join(dir, "users.txt")
+creds, err := auth.LoadCredentials(path)
+if err != nil {
+t.Fatalf("LoadCredentials: %v", err)
+}
+
+cfg := &config.Config{
+CookieName:    cookieName,
+CookieSecure:  false,
+SessionTTL:    60,
+LoginTemplate: tmplPath,
+}
+sessions := auth.NewSessionStore(cfg.SessionTTL)
+ipCheck, err := auth.NewIPChecker(nil)
+if err != nil {
+t.Fatalf("NewIPChecker: %v", err)
+}
+h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+if err != nil {
+t.Fatalf("NewHandlers: %v", err)
+}
+
+req := httptest.NewRequest(http.MethodGet, "/login?rd=/dashboard", nil)
+rr := httptest.NewRecorder()
+h.LoginPage(rr, req)
+resp := rr.Result()
+defer resp.Body.Close()
+
+if resp.StatusCode != http.StatusOK {
+t.Fatalf("expected %d, got %d", http.StatusOK, resp.StatusCode)
+}
+body, err := io.ReadAll(resp.Body)
+if err != nil {
+t.Fatalf("ReadAll: %v", err)
+}
+if !strings.Contains(string(body), `id="custom"`) {
+t.Errorf("response body does not contain custom template marker: %s", body)
+}
+if !strings.Contains(string(body), "/dashboard") {
+t.Errorf("response body does not contain redirect URL: %s", body)
+}
+}
+
+func TestNewHandlers_InvalidCustomTemplate(t *testing.T) {
+creds, err := auth.LoadCredentials(filepath.Join(t.TempDir(), "users.txt"))
+if err != nil {
+t.Fatalf("LoadCredentials: %v", err)
+}
+cfg := &config.Config{
+CookieName:    cookieName,
+SessionTTL:    60,
+LoginTemplate: "/nonexistent/path/login.html",
+}
+sessions := auth.NewSessionStore(cfg.SessionTTL)
+ipCheck, err := auth.NewIPChecker(nil)
+if err != nil {
+t.Fatalf("NewIPChecker: %v", err)
+}
+_, err = server.NewHandlers(cfg, creds, sessions, ipCheck)
+if err == nil {
+t.Fatal("expected error for nonexistent template path, got nil")
+}
 }

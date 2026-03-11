@@ -145,6 +145,35 @@ func TestLoad_BoolEnvVars(t *testing.T) {
 	}
 }
 
+func TestLoad_LoginTemplateEnv(t *testing.T) {
+	t.Setenv("LILATH_LOGIN_TEMPLATE", "/data/custom-login.html")
+
+	cfg := defaults()
+	applyEnv(cfg)
+
+	if cfg.LoginTemplate != "/data/custom-login.html" {
+		t.Errorf("LoginTemplate: got %q, want %q", cfg.LoginTemplate, "/data/custom-login.html")
+	}
+}
+
+func TestLoad_LoginTemplateYAML(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(cfgPath, []byte("login_template: /data/custom-login.html\n"), 0600)
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.LoginTemplate != "/data/custom-login.html" {
+		t.Errorf("LoginTemplate: got %q, want %q", cfg.LoginTemplate, "/data/custom-login.html")
+	}
+}
+
 func TestLoad_IPAllowlistEnv(t *testing.T) {
 	tests := []struct {
 		env  string

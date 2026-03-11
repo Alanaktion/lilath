@@ -2,6 +2,7 @@ package server
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -15,16 +16,17 @@ import (
 //go:embed templates
 var templateFS embed.FS
 
-var loginTmpl = template.Must(
+var defaultLoginTmpl = template.Must(
 	template.ParseFS(templateFS, "templates/login.html"),
 )
 
 // Handlers bundles all HTTP handler state.
 type Handlers struct {
-	cfg      *config.Config
-	creds    *auth.Credentials
-	sessions *auth.SessionStore
-	ipCheck  *auth.IPChecker
+	cfg       *config.Config
+	creds     *auth.Credentials
+	sessions  *auth.SessionStore
+	ipCheck   *auth.IPChecker
+	loginTmpl *template.Template
 }
 
 func NewHandlers(
@@ -32,8 +34,16 @@ func NewHandlers(
 	creds *auth.Credentials,
 	sessions *auth.SessionStore,
 	ipCheck *auth.IPChecker,
-) *Handlers {
-	return &Handlers{cfg: cfg, creds: creds, sessions: sessions, ipCheck: ipCheck}
+) (*Handlers, error) {
+	tmpl := defaultLoginTmpl
+	if cfg.LoginTemplate != "" {
+		t, err := template.ParseFiles(cfg.LoginTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("loading login template %q: %w", cfg.LoginTemplate, err)
+		}
+		tmpl = t
+	}
+	return &Handlers{cfg: cfg, creds: creds, sessions: sessions, ipCheck: ipCheck, loginTmpl: tmpl}, nil
 }
 
 // ForwardAuth is the Traefik forwardAuth endpoint.
@@ -106,7 +116,7 @@ func (h *Handlers) LoginPage(w http.ResponseWriter, r *http.Request) {
 		rd = "/"
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := loginTmpl.Execute(w, loginData{RedirectURL: rd}); err != nil {
+	if err := h.loginTmpl.Execute(w, loginData{RedirectURL: rd}); err != nil {
 		log.Printf("template error: %v", err)
 	}
 }
@@ -128,7 +138,7 @@ func (h *Handlers) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if !h.creds.Verify(username, password) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
-		if err := loginTmpl.Execute(w, loginData{Error: "Invalid username or password.", RedirectURL: rd}); err != nil {
+		if err := h.loginTmpl.Execute(w, loginData{Error: "Invalid username or password.", RedirectURL: rd}); err != nil {
 			log.Printf("template error: %v", err)
 		}
 		return

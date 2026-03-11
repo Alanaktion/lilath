@@ -125,6 +125,7 @@ Every config option has a corresponding `LILATH_*` environment variable:
 | `LILATH_BASE_DOMAIN`        | _(empty)_         | Optional base domain for login/cookie sharing across subdomains |
 | `LILATH_COOKIE_SECURE`      | `true`            | Set to `false` for plain HTTP testing |
 | `LILATH_TRUST_FORWARDED_FOR`| `true`            | Read client IP from `X-Forwarded-For` |
+| `LILATH_LOGIN_TEMPLATE`     | _(empty)_         | Path to a custom HTML login template  |
 
 Boolean variables accept `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`.
 `LILATH_IP_ALLOWLIST` accepts a comma-separated list (e.g. `127.0.0.1,10.0.0.0/8`).
@@ -254,3 +255,61 @@ htpasswd -bnBC 10 "" "mypassword" | tr -d ':\n' | sed 's/$2y/$2a/'
 - Set `trust_forwarded_for: false` if lilath is exposed directly to untrusted
   networks.
 - The session store is in-memory; sessions are lost on restart.
+
+---
+
+## Custom login template
+
+The built-in login page can be replaced with your own HTML template without
+recompiling. Set `login_template` in the config file (or the
+`LILATH_LOGIN_TEMPLATE` environment variable) to the path of a Go
+[`html/template`][html-tmpl] file.
+
+[html-tmpl]: https://pkg.go.dev/html/template
+
+The template receives a single data value with two fields:
+
+| Field          | Type     | Description                                    |
+| -------------- | -------- | ---------------------------------------------- |
+| `.RedirectURL` | `string` | The URL the user will be sent to after login   |
+| `.Error`       | `string` | Non-empty when credentials were rejected       |
+
+Minimal example template:
+
+```html
+<!DOCTYPE html>
+<html>
+<body>
+  {{if .Error}}<p style="color:red">{{.Error}}</p>{{end}}
+  <form method="POST" action="/login">
+    <input type="hidden" name="rd" value="{{.RedirectURL}}">
+    <input type="text"     name="username" placeholder="Username" autocomplete="username">
+    <input type="password" name="password" placeholder="Password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>
+```
+
+### Using a custom template with Docker Compose
+
+Bind-mount your local template file into the container and point
+`LILATH_LOGIN_TEMPLATE` at the in-container path:
+
+```yaml
+services:
+  lilath:
+    image: lilath
+    environment:
+      LILATH_CREDENTIALS_FILE: /data/users.txt
+      LILATH_COOKIE_SECURE: "true"
+      LILATH_TRUST_FORWARDED_FOR: "true"
+      LILATH_LOGIN_TEMPLATE: /data/login.html
+    volumes:
+      - ./users.txt:/data/users.txt
+      - ./login.html:/data/login.html:ro
+```
+
+The `:ro` flag makes the bind mount read-only inside the container.
+Changes to `login.html` on the host take effect the next time the container
+is restarted (the template is read once at startup).
