@@ -186,9 +186,5 @@ func normalizeBaseDomain(base string) string {
 }
 
 func cookieDomain(base string) string {
-	normalized := normalizeBaseDomain(base)
-	if normalized == "" {
-		return ""
-	}
-	return "." + normalized
+	return normalizeBaseDomain(base)
 }
