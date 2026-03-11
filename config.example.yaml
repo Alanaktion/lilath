@@ -21,7 +21,7 @@ cookie_name: "lilath_session"
 
 # Optional base domain for centralized login/cookies across subdomains.
 # Example: for app requests on asdf.example.com, lilath redirects to
-# https://example.com/login and sets cookie domain .example.com.
+# https://example.com/login and sets cookie domain example.com.
 # Leave empty to keep current behavior based on X-Forwarded-Host.
 # base_domain: "example.com"
 
