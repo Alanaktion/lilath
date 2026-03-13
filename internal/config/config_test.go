@@ -174,6 +174,35 @@ func TestLoad_LoginTemplateYAML(t *testing.T) {
 	}
 }
 
+func TestLoad_TokensFileEnv(t *testing.T) {
+	t.Setenv("LILATH_TOKENS_FILE", "/data/tokens.txt")
+
+	cfg := defaults()
+	applyEnv(cfg)
+
+	if cfg.TokensFile != "/data/tokens.txt" {
+		t.Errorf("TokensFile: got %q, want %q", cfg.TokensFile, "/data/tokens.txt")
+	}
+}
+
+func TestLoad_TokensFileYAML(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(cfgPath, []byte("tokens_file: /data/tokens.txt\n"), 0600)
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.TokensFile != "/data/tokens.txt" {
+		t.Errorf("TokensFile: got %q, want %q", cfg.TokensFile, "/data/tokens.txt")
+	}
+}
+
 func TestLoad_IPAllowlistEnv(t *testing.T) {
 	tests := []struct {
 		env  string
