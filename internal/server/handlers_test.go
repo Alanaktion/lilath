@@ -55,7 +55,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *auth.Credentials) {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
 
-	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
 	if err != nil {
 		t.Fatalf("NewHandlers: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestForwardAuth_IPAllowlist(t *testing.T) {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
 
-	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
 	if err != nil {
 		t.Fatalf("NewHandlers: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestForwardAuth_WithBaseDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
-	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
 	if err != nil {
 		t.Fatalf("NewHandlers: %v", err)
 	}
@@ -308,6 +308,124 @@ func TestForwardAuth_WithBaseDomain(t *testing.T) {
 		t.Fatalf("rd param: expected absolute original URL, got %q", got)
 	}
 
+}
+
+// --------------------------------------------------------------------------
+// Bearer token auth — GET /auth with Authorization: Bearer <token>
+// --------------------------------------------------------------------------
+
+// newTestServerWithTokens returns an httptest.Server configured with a
+// TokenStore loaded from the given tokens slice.
+func newTestServerWithTokens(t *testing.T, tokens []string) *httptest.Server {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	usersPath := filepath.Join(dir, "users.txt")
+	creds, err := auth.LoadCredentials(usersPath)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+
+	tokensContent := strings.Join(tokens, "\n") + "\n"
+	tokensPath := filepath.Join(dir, "tokens.txt")
+	if err := os.WriteFile(tokensPath, []byte(tokensContent), 0600); err != nil {
+		t.Fatalf("WriteFile tokens: %v", err)
+	}
+	tokenStore, err := auth.LoadTokens(tokensPath)
+	if err != nil {
+		t.Fatalf("LoadTokens: %v", err)
+	}
+
+	cfg := &config.Config{
+		CookieName:        cookieName,
+		CookieSecure:      false,
+		SessionTTL:        60,
+		TrustForwardedFor: false,
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, tokenStore)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	srv := server.NewServer(":0", h)
+	ts := httptest.NewServer(srv.Handler)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestForwardAuth_BearerToken_ValidToken(t *testing.T) {
+	ts := newTestServerWithTokens(t, []string{"my-secret-token"})
+	client := noFollowClient()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.Header.Set("Authorization", "Bearer my-secret-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth with Bearer: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d for valid Bearer token, got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+func TestForwardAuth_BearerToken_InvalidToken(t *testing.T) {
+	ts := newTestServerWithTokens(t, []string{"my-secret-token"})
+	client := noFollowClient()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth with bad Bearer: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected %d for invalid Bearer token, got %d", http.StatusFound, resp.StatusCode)
+	}
+}
+
+func TestForwardAuth_BearerToken_NoTokensConfigured(t *testing.T) {
+	// When no tokens are configured, Bearer headers are ignored.
+	ts, _ := newTestServer(t)
+	client := noFollowClient()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.Header.Set("Authorization", "Bearer any-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth with Bearer (no tokens configured): %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected %d when no tokens configured, got %d", http.StatusFound, resp.StatusCode)
+	}
+}
+
+func TestForwardAuth_BearerToken_EmptyTokenStore(t *testing.T) {
+	// A token file containing only comments should behave the same as no file.
+	ts := newTestServerWithTokens(t, []string{"# only comments"})
+	client := noFollowClient()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.Header.Set("Authorization", "Bearer any-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth with Bearer (empty token store): %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected %d for empty token store, got %d", http.StatusFound, resp.StatusCode)
+	}
 }
 
 // --------------------------------------------------------------------------
@@ -411,7 +529,7 @@ func TestLoginSubmit_SetsCookieDomainWithBaseDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
-	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
 	if err != nil {
 		t.Fatalf("NewHandlers: %v", err)
 	}
@@ -645,7 +763,7 @@ func TestLogout_ClearsCookieDomainWithBaseDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIPChecker: %v", err)
 	}
-	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
 	if err != nil {
 		t.Fatalf("NewHandlers: %v", err)
 	}
@@ -703,7 +821,7 @@ ipCheck, err := auth.NewIPChecker(nil)
 if err != nil {
 t.Fatalf("NewIPChecker: %v", err)
 }
-h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
 if err != nil {
 t.Fatalf("NewHandlers: %v", err)
 }
@@ -744,7 +862,7 @@ ipCheck, err := auth.NewIPChecker(nil)
 if err != nil {
 t.Fatalf("NewIPChecker: %v", err)
 }
-_, err = server.NewHandlers(cfg, creds, sessions, ipCheck)
+_, err = server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
 if err == nil {
 t.Fatal("expected error for nonexistent template path, got nil")
 }

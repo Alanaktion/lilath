@@ -24,6 +24,9 @@ type Config struct {
 	// LoginTemplate is an optional path to a custom HTML template file that
 	// replaces the built-in login page. Leave empty to use the default.
 	LoginTemplate string `yaml:"login_template"`
+	// TokensFile is an optional path to a text file containing allowed bearer
+	// tokens, one per line. Leave empty to disable Bearer token auth.
+	TokensFile string `yaml:"tokens_file"`
 }
 
 func defaults() *Config {
@@ -72,6 +75,7 @@ func Load(path string) (*Config, error) {
 //	LILATH_COOKIE_SECURE       — "true"/"1"/"yes" or "false"/"0"/"no"
 //	LILATH_TRUST_FORWARDED_FOR — "true"/"1"/"yes" or "false"/"0"/"no"
 //	LILATH_LOGIN_TEMPLATE      — e.g. "/data/login.html"
+//	LILATH_TOKENS_FILE         — e.g. "/data/tokens.txt"
 func applyEnv(cfg *Config) {
 	if v := os.Getenv("LILATH_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
@@ -106,6 +110,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LILATH_LOGIN_TEMPLATE"); v != "" {
 		cfg.LoginTemplate = v
+	}
+	if v := os.Getenv("LILATH_TOKENS_FILE"); v != "" {
+		cfg.TokensFile = v
 	}
 }
 

@@ -1,11 +1,14 @@
 # lilath
 
 A lil' Go web app that acts as a [Traefik `forwardAuth`][fwd] middleware,
-providing two layers of access control:
+providing three layers of access control:
 
 1. **IP allowlist** — requests from listed IPs (or CIDR ranges) are allowed
    immediately, no login required.
-2. **Credential auth** — everyone else is redirected to a login page.
+2. **Bearer token auth** — requests with a valid `Authorization: Bearer <token>`
+   header are authenticated without requiring a login page. Tokens are stored in
+   a plain text file, one per line.
+3. **Credential auth** — everyone else is redirected to a login page.
    Credentials are stored as bcrypt hashes in a plain text file.
 
 [fwd]: https://doc.traefik.io/traefik/middlewares/http/forwardauth/
@@ -126,6 +129,7 @@ Every config option has a corresponding `LILATH_*` environment variable:
 | `LILATH_COOKIE_SECURE`      | `true`            | Set to `false` for plain HTTP testing |
 | `LILATH_TRUST_FORWARDED_FOR`| `true`            | Read client IP from `X-Forwarded-For` |
 | `LILATH_LOGIN_TEMPLATE`     | _(empty)_         | Path to a custom HTML login template  |
+| `LILATH_TOKENS_FILE`        | _(empty)_         | Path to a Bearer tokens file (one token per line) |
 
 Boolean variables accept `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`.
 `LILATH_IP_ALLOWLIST` accepts a comma-separated list (e.g. `127.0.0.1,10.0.0.0/8`).
@@ -228,6 +232,59 @@ services:
 | `GET`      | `/login`  | Login page                                |
 | `POST`     | `/login`  | Submit credentials                        |
 | `GET/POST` | `/logout` | Invalidate session                        |
+
+---
+
+## Bearer token authentication
+
+As an alternative to the web login page, lilath can authenticate requests that
+carry an `Authorization: Bearer <token>` header. This is useful for API clients,
+CI pipelines, or other automated tools that cannot interact with a login form.
+
+### Tokens file format
+
+Create a plain text file with one token per line. Lines beginning with `#` and
+blank lines are ignored.
+
+```
+# tokens.txt — one Bearer token per line
+ci-pipeline-token-abc123
+monitoring-token-xyz789
+```
+
+Point lilath at the file via the `tokens_file` config key or the
+`LILATH_TOKENS_FILE` environment variable:
+
+```yaml
+tokens_file: "/data/tokens.txt"
+```
+
+Tokens are reloaded on `SIGHUP` (same as credentials), so you can add or revoke
+tokens without restarting the server:
+
+```bash
+kill -HUP <pid>
+# or, for Docker:
+docker kill --signal=HUP lilath
+```
+
+### Using tokens with Traefik
+
+Pass the `Authorization` header through to the forwardAuth endpoint by adding
+it to `authRequestHeaders` in your Traefik middleware configuration:
+
+```yaml
+http:
+  middlewares:
+    lilath-auth:
+      forwardAuth:
+        address: "http://lilath:8080/auth"
+        trustForwardHeader: true
+        authRequestHeaders:
+          - "Authorization"
+        authResponseHeaders:
+          - "X-Auth-User"
+```
 
 ---
 

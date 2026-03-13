@@ -33,13 +33,21 @@ func main() {
 
 	sessions := auth.NewSessionStore(cfg.SessionTTL)
 
-	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck)
+	tokens := auth.NewTokenStore()
+	if cfg.TokensFile != "" {
+		tokens, err = auth.LoadTokens(cfg.TokensFile)
+		if err != nil {
+			log.Fatalf("loading tokens: %v", err)
+		}
+	}
+
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, tokens)
 	if err != nil {
 		log.Fatalf("initializing handlers: %v", err)
 	}
 	srv := server.NewServer(cfg.ListenAddr, h)
 
-	// Reload credentials on SIGHUP without restarting.
+	// Reload credentials and tokens on SIGHUP without restarting.
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGHUP)
@@ -47,6 +55,11 @@ func main() {
 			log.Println("received SIGHUP, reloading credentials")
 			if err := creds.Reload(); err != nil {
 				log.Printf("reload error: %v", err)
+			}
+			if cfg.TokensFile != "" {
+				if err := tokens.Reload(cfg.TokensFile); err != nil {
+					log.Printf("token reload error: %v", err)
+				}
 			}
 		}
 	}()

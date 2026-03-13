@@ -26,6 +26,7 @@ type Handlers struct {
 	creds     *auth.Credentials
 	sessions  *auth.SessionStore
 	ipCheck   *auth.IPChecker
+	tokens    *auth.TokenStore
 	loginTmpl *template.Template
 }
 
@@ -34,6 +35,7 @@ func NewHandlers(
 	creds *auth.Credentials,
 	sessions *auth.SessionStore,
 	ipCheck *auth.IPChecker,
+	tokens *auth.TokenStore,
 ) (*Handlers, error) {
 	tmpl := defaultLoginTmpl
 	if cfg.LoginTemplate != "" {
@@ -43,7 +45,7 @@ func NewHandlers(
 		}
 		tmpl = t
 	}
-	return &Handlers{cfg: cfg, creds: creds, sessions: sessions, ipCheck: ipCheck, loginTmpl: tmpl}, nil
+	return &Handlers{cfg: cfg, creds: creds, sessions: sessions, ipCheck: ipCheck, tokens: tokens, loginTmpl: tmpl}, nil
 }
 
 // ForwardAuth is the Traefik forwardAuth endpoint.
@@ -58,7 +60,18 @@ func (h *Handlers) ForwardAuth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. Check session cookie.
+	// 2. Check Bearer token in Authorization header.
+	if !h.tokens.IsEmpty() {
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			if h.tokens.Allow(token) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+	}
+
+	// 3. Check session cookie.
 	cookie, err := r.Cookie(h.cfg.CookieName)
 	if err == nil && cookie.Value != "" {
 		sess := h.sessions.Get(cookie.Value)
