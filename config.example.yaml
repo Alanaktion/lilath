@@ -41,3 +41,20 @@ trust_forwarded_for: true
 # When set, requests with a matching Authorization: Bearer <token> header
 # are authenticated without requiring a login. Leave unset to disable.
 # tokens_file: "/data/tokens.txt"
+
+# Rate limiting (per IP address, fixed-window counter).
+# Set a limit to 0 to disable that limiter.
+
+# Maximum requests to GET /auth per IP per window. Protects underlying services.
+rate_limit_requests: 300
+
+# Maximum POST /login attempts per IP per window. Prevents credential stuffing.
+rate_limit_login_requests: 10
+
+# Window size in seconds for rate limiting.
+rate_limit_window_seconds: 60
+
+# IPs/CIDRs exempt from all rate limiting (e.g. internal monitoring).
+# IPs already in ip_allowlist are also exempt.
+# rate_limit_allowlist:
+#   - "10.0.0.0/8"

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/alanaktion/lilath/internal/auth"
 	"github.com/alanaktion/lilath/internal/config"
@@ -22,12 +23,15 @@ var defaultLoginTmpl = template.Must(
 
 // Handlers bundles all HTTP handler state.
 type Handlers struct {
-	cfg       *config.Config
-	creds     *auth.Credentials
-	sessions  *auth.SessionStore
-	ipCheck   *auth.IPChecker
-	tokens    *auth.TokenStore
-	loginTmpl *template.Template
+	cfg              *config.Config
+	creds            *auth.Credentials
+	sessions         *auth.SessionStore
+	ipCheck          *auth.IPChecker
+	tokens           *auth.TokenStore
+	loginTmpl        *template.Template
+	rateLimiter      *auth.RateLimiter
+	loginRateLimiter *auth.RateLimiter
+	rlAllowlist      *auth.IPChecker
 }
 
 func NewHandlers(
@@ -45,22 +49,52 @@ func NewHandlers(
 		}
 		tmpl = t
 	}
-	return &Handlers{cfg: cfg, creds: creds, sessions: sessions, ipCheck: ipCheck, tokens: tokens, loginTmpl: tmpl}, nil
+
+	rlAllowlist, err := auth.NewIPChecker(cfg.RateLimitAllowlist)
+	if err != nil {
+		return nil, fmt.Errorf("parsing rate limit allowlist: %w", err)
+	}
+
+	window := time.Duration(cfg.RateLimitWindowSeconds) * time.Second
+	if window <= 0 {
+		window = time.Minute
+	}
+
+	return &Handlers{
+		cfg:              cfg,
+		creds:            creds,
+		sessions:         sessions,
+		ipCheck:          ipCheck,
+		tokens:           tokens,
+		loginTmpl:        tmpl,
+		rateLimiter:      auth.NewRateLimiter(cfg.RateLimitRequests, window),
+		loginRateLimiter: auth.NewRateLimiter(cfg.RateLimitLoginRequests, window),
+		rlAllowlist:      rlAllowlist,
+	}, nil
 }
 
 // ForwardAuth is the Traefik forwardAuth endpoint.
 // Returns 200 when the request is authenticated, 302 to /login otherwise.
 func (h *Handlers) ForwardAuth(w http.ResponseWriter, r *http.Request) {
-	// 1. Check IP allowlist.
+	clientIP := auth.ClientIP(r, h.cfg.TrustForwardedFor)
+
+	// 1. Check IP allowlist — trusted IPs bypass auth and rate limiting.
 	if !h.ipCheck.IsEmpty() {
-		clientIP := auth.ClientIP(r, h.cfg.TrustForwardedFor)
 		if clientIP != nil && h.ipCheck.Allow(clientIP) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 	}
 
-	// 2. Check Bearer token in Authorization header.
+	// 2. Apply rate limiting (skip for IPs in the rate-limit allowlist).
+	if clientIP != nil && !h.rlAllowlist.Allow(clientIP) {
+		if !h.rateLimiter.AllowIP(clientIP) {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+	}
+
+	// 3. Check Bearer token in Authorization header.
 	if !h.tokens.IsEmpty() {
 		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
@@ -71,7 +105,7 @@ func (h *Handlers) ForwardAuth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Check session cookie.
+	// 4. Check session cookie.
 	cookie, err := r.Cookie(h.cfg.CookieName)
 	if err == nil && cookie.Value != "" {
 		sess := h.sessions.Get(cookie.Value)
@@ -136,6 +170,16 @@ func (h *Handlers) LoginPage(w http.ResponseWriter, r *http.Request) {
 
 // LoginSubmit handles credential submission.
 func (h *Handlers) LoginSubmit(w http.ResponseWriter, r *http.Request) {
+	// Apply login rate limiting. Skip for IPs in the auth allowlist or
+	// rate-limit allowlist.
+	clientIP := auth.ClientIP(r, h.cfg.TrustForwardedFor)
+	if clientIP != nil && !h.ipCheck.Allow(clientIP) && !h.rlAllowlist.Allow(clientIP) {
+		if !h.loginRateLimiter.AllowIP(clientIP) {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+	}
+
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
