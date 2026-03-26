@@ -130,9 +130,14 @@ Every config option has a corresponding `LILATH_*` environment variable:
 | `LILATH_TRUST_FORWARDED_FOR`| `true`            | Read client IP from `X-Forwarded-For` |
 | `LILATH_LOGIN_TEMPLATE`     | _(empty)_         | Path to a custom HTML login template  |
 | `LILATH_TOKENS_FILE`        | _(empty)_         | Path to a Bearer tokens file (one token per line) |
+| `LILATH_RATE_LIMIT_REQUESTS`| `300`             | Max `GET /auth` requests per IP per window (`0` disables) |
+| `LILATH_RATE_LIMIT_LOGIN`   | `10`              | Max `POST /login` attempts per IP per window (`0` disables) |
+| `LILATH_RATE_LIMIT_WINDOW`  | `60`              | Rate-limit window size in seconds |
+| `LILATH_RATE_LIMIT_ALLOWLIST`| _(empty)_        | Comma-separated IPs/CIDRs exempt from rate limiting |
 
 Boolean variables accept `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`.
 `LILATH_IP_ALLOWLIST` accepts a comma-separated list (e.g. `127.0.0.1,10.0.0.0/8`).
+`LILATH_RATE_LIMIT_ALLOWLIST` also accepts a comma-separated list.
 When `LILATH_BASE_DOMAIN` is set (for example `example.com`), unauthenticated
 requests are redirected to that domain's `/login` endpoint and session cookies
 are written with domain `.example.com` so they are sent to subdomains.
@@ -232,6 +237,53 @@ services:
 | `GET`      | `/login`  | Login page                                |
 | `POST`     | `/login`  | Submit credentials                        |
 | `GET/POST` | `/logout` | Invalidate session                        |
+
+---
+
+## Rate limiting
+
+lilath applies per-IP fixed-window rate limiting by default:
+
+- `GET /auth`: `300` requests per `60` seconds per IP
+- `POST /login`: `10` attempts per `60` seconds per IP
+
+When a limit is exceeded, lilath responds with `429 Too Many Requests`.
+
+### Configuration keys (YAML)
+
+Set these keys in `config.yaml`:
+
+```yaml
+rate_limit_requests: 300
+rate_limit_login_requests: 10
+rate_limit_window_seconds: 60
+rate_limit_allowlist:
+  - "10.0.0.0/8"
+  - "192.168.0.0/16"
+```
+
+- `rate_limit_requests`: max `GET /auth` requests per IP per window (`0` disables)
+- `rate_limit_login_requests`: max `POST /login` attempts per IP per window (`0` disables)
+- `rate_limit_window_seconds`: window size in seconds
+- `rate_limit_allowlist`: IPs/CIDRs exempt from all rate limiting
+
+Notes:
+
+- IPs already listed in `ip_allowlist` bypass auth and rate limiting.
+- `rate_limit_allowlist` is useful for internal monitors, health checks, or trusted networks.
+
+### Environment variables
+
+Rate limiting can also be configured with environment variables:
+
+```bash
+LILATH_RATE_LIMIT_REQUESTS=300
+LILATH_RATE_LIMIT_LOGIN=10
+LILATH_RATE_LIMIT_WINDOW=60
+LILATH_RATE_LIMIT_ALLOWLIST=10.0.0.0/8,192.168.0.0/16
+```
+
+Environment variables override values from `config.yaml`.
 
 ---
 
