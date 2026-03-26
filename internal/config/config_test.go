@@ -231,3 +231,84 @@ func TestLoad_IPAllowlistEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_RateLimitDefaults(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RateLimitRequests != 300 {
+		t.Errorf("RateLimitRequests: got %d, want 300", cfg.RateLimitRequests)
+	}
+	if cfg.RateLimitLoginRequests != 10 {
+		t.Errorf("RateLimitLoginRequests: got %d, want 10", cfg.RateLimitLoginRequests)
+	}
+	if cfg.RateLimitWindowSeconds != 60 {
+		t.Errorf("RateLimitWindowSeconds: got %d, want 60", cfg.RateLimitWindowSeconds)
+	}
+	if len(cfg.RateLimitAllowlist) != 0 {
+		t.Errorf("RateLimitAllowlist: got %v, want empty", cfg.RateLimitAllowlist)
+	}
+}
+
+func TestLoad_RateLimitEnvVars(t *testing.T) {
+	t.Setenv("LILATH_RATE_LIMIT_REQUESTS", "500")
+	t.Setenv("LILATH_RATE_LIMIT_LOGIN", "5")
+	t.Setenv("LILATH_RATE_LIMIT_WINDOW", "30")
+	t.Setenv("LILATH_RATE_LIMIT_ALLOWLIST", "10.0.0.1, 192.168.0.0/16")
+
+	cfg := defaults()
+	applyEnv(cfg)
+
+	if cfg.RateLimitRequests != 500 {
+		t.Errorf("RateLimitRequests: got %d, want 500", cfg.RateLimitRequests)
+	}
+	if cfg.RateLimitLoginRequests != 5 {
+		t.Errorf("RateLimitLoginRequests: got %d, want 5", cfg.RateLimitLoginRequests)
+	}
+	if cfg.RateLimitWindowSeconds != 30 {
+		t.Errorf("RateLimitWindowSeconds: got %d, want 30", cfg.RateLimitWindowSeconds)
+	}
+	if len(cfg.RateLimitAllowlist) != 2 {
+		t.Fatalf("RateLimitAllowlist len: got %d, want 2", len(cfg.RateLimitAllowlist))
+	}
+	if cfg.RateLimitAllowlist[0] != "10.0.0.1" {
+		t.Errorf("RateLimitAllowlist[0]: got %q, want %q", cfg.RateLimitAllowlist[0], "10.0.0.1")
+	}
+	if cfg.RateLimitAllowlist[1] != "192.168.0.0/16" {
+		t.Errorf("RateLimitAllowlist[1]: got %q, want %q", cfg.RateLimitAllowlist[1], "192.168.0.0/16")
+	}
+}
+
+func TestLoad_RateLimitYAML(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(cfgPath, []byte(`rate_limit_requests: 100
+rate_limit_login_requests: 3
+rate_limit_window_seconds: 120
+rate_limit_allowlist:
+  - "10.0.0.1"
+  - "172.16.0.0/12"
+`), 0600)
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.RateLimitRequests != 100 {
+		t.Errorf("RateLimitRequests: got %d, want 100", cfg.RateLimitRequests)
+	}
+	if cfg.RateLimitLoginRequests != 3 {
+		t.Errorf("RateLimitLoginRequests: got %d, want 3", cfg.RateLimitLoginRequests)
+	}
+	if cfg.RateLimitWindowSeconds != 120 {
+		t.Errorf("RateLimitWindowSeconds: got %d, want 120", cfg.RateLimitWindowSeconds)
+	}
+	if len(cfg.RateLimitAllowlist) != 2 || cfg.RateLimitAllowlist[0] != "10.0.0.1" || cfg.RateLimitAllowlist[1] != "172.16.0.0/12" {
+		t.Errorf("RateLimitAllowlist: got %v", cfg.RateLimitAllowlist)
+	}
+}

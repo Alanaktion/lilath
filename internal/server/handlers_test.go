@@ -867,3 +867,238 @@ if err == nil {
 t.Fatal("expected error for nonexistent template path, got nil")
 }
 }
+
+// --------------------------------------------------------------------------
+// Rate limiting
+// --------------------------------------------------------------------------
+
+// newRateLimitedServer returns a test server with rate limiting enabled.
+// limit is the max requests for GET /auth and loginLimit for POST /login.
+func newRateLimitedServer(t *testing.T, limit, loginLimit int) *httptest.Server {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "users.txt")
+	hash, err := auth.HashPassword(testPassword)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := auth.WriteCredentials(path, map[string]string{testUser: hash}); err != nil {
+		t.Fatalf("WriteCredentials: %v", err)
+	}
+	creds, err := auth.LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+
+	cfg := &config.Config{
+		CookieName:             cookieName,
+		CookieSecure:           false,
+		SessionTTL:             60,
+		TrustForwardedFor:      false,
+		RateLimitRequests:      limit,
+		RateLimitLoginRequests: loginLimit,
+		RateLimitWindowSeconds: 60,
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	srv := server.NewServer(":0", h)
+	ts := httptest.NewServer(srv.Handler)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestForwardAuth_RateLimit(t *testing.T) {
+	ts := newRateLimitedServer(t, 3, 10)
+	client := noFollowClient()
+
+	// First 3 requests should succeed (redirect to login — not rate-limited).
+	for i := 1; i <= 3; i++ {
+		resp, err := client.Get(ts.URL + "/auth")
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatalf("request %d: got 429, expected non-429", i)
+		}
+	}
+
+	// 4th request should be rate-limited.
+	resp, err := client.Get(ts.URL + "/auth")
+	if err != nil {
+		t.Fatalf("request 4: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("request 4: expected 429, got %d", resp.StatusCode)
+	}
+}
+
+func TestForwardAuth_RateLimit_Disabled(t *testing.T) {
+	ts := newRateLimitedServer(t, 0, 0)
+	client := noFollowClient()
+
+	// With limit=0, requests should never be rate-limited.
+	for i := 0; i < 20; i++ {
+		resp, err := client.Get(ts.URL + "/auth")
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatalf("request %d: got 429 with rate limiting disabled", i)
+		}
+	}
+}
+
+func TestLoginSubmit_RateLimit(t *testing.T) {
+	ts := newRateLimitedServer(t, 100, 2)
+	client := noFollowClient()
+
+	postLogin := func() int {
+		form := url.Values{
+			"username": {"baduser"},
+			"password": {"badpass"},
+			"rd":       {"/"},
+		}
+		resp, err := client.PostForm(ts.URL+"/login", form)
+		if err != nil {
+			t.Fatalf("POST /login: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// First 2 attempts are within limit.
+	for i := 1; i <= 2; i++ {
+		if status := postLogin(); status == http.StatusTooManyRequests {
+			t.Fatalf("attempt %d: got 429, should be within limit", i)
+		}
+	}
+
+	// 3rd attempt should be rate-limited.
+	if status := postLogin(); status != http.StatusTooManyRequests {
+		t.Fatalf("attempt 3: expected 429, got %d", status)
+	}
+}
+
+func TestForwardAuth_RateLimit_IPAllowlistBypass(t *testing.T) {
+	// httptest uses 127.0.0.1 as the remote address — add it to ip_allowlist.
+	path := filepath.Join(t.TempDir(), "users.txt")
+	creds, err := auth.LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+	cfg := &config.Config{
+		CookieName:             cookieName,
+		CookieSecure:           false,
+		SessionTTL:             60,
+		TrustForwardedFor:      false,
+		RateLimitRequests:      1, // very tight limit
+		RateLimitWindowSeconds: 60,
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	srv := server.NewServer(":0", h)
+	ts := httptest.NewServer(srv.Handler)
+	t.Cleanup(ts.Close)
+
+	client := noFollowClient()
+	// Many requests from the allowlisted 127.0.0.1 — none should be 429.
+	for i := 0; i < 10; i++ {
+		resp, err := client.Get(ts.URL + "/auth")
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatalf("request %d: allowlisted IP got 429", i)
+		}
+	}
+}
+
+func TestForwardAuth_RateLimit_RLAllowlistBypass(t *testing.T) {
+	// Use the rate_limit_allowlist to exempt 127.0.0.1 from rate limiting
+	// while still requiring authentication.
+	path := filepath.Join(t.TempDir(), "users.txt")
+	hash, err := auth.HashPassword(testPassword)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := auth.WriteCredentials(path, map[string]string{testUser: hash}); err != nil {
+		t.Fatalf("WriteCredentials: %v", err)
+	}
+	creds, err := auth.LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+	cfg := &config.Config{
+		CookieName:             cookieName,
+		CookieSecure:           false,
+		SessionTTL:             60,
+		TrustForwardedFor:      false,
+		RateLimitRequests:      1, // very tight limit
+		RateLimitWindowSeconds: 60,
+		RateLimitAllowlist:     []string{"127.0.0.1"},
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	srv := server.NewServer(":0", h)
+	ts := httptest.NewServer(srv.Handler)
+	t.Cleanup(ts.Close)
+
+	client := noFollowClient()
+	// Many requests from the rate-limit-allowlisted 127.0.0.1 — none 429.
+	for i := 0; i < 10; i++ {
+		resp, err := client.Get(ts.URL + "/auth")
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatalf("request %d: rate-limit-allowlisted IP got 429", i)
+		}
+	}
+}
+
+func TestNewHandlers_InvalidRateLimitAllowlist(t *testing.T) {
+	creds, err := auth.LoadCredentials(filepath.Join(t.TempDir(), "users.txt"))
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+	cfg := &config.Config{
+		CookieName:         cookieName,
+		SessionTTL:         60,
+		RateLimitAllowlist: []string{"not-a-valid-ip"},
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	_, err = server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
+	if err == nil {
+		t.Fatal("expected error for invalid rate limit allowlist, got nil")
+	}
+}
