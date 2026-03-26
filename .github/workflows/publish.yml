@@ -49,6 +49,14 @@ jobs:
             # tag main branch as 'edge'
             type=edge,branch=main
 
+      - name: Clean up old package versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: lilath
+          package-type: container
+          min-versions-to-keep: 3
+          delete-only-untagged-versions: true
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
