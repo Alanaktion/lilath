@@ -48,8 +48,6 @@ jobs:
             type=semver,pattern={{major}}
             # tag main branch as 'edge'
             type=edge,branch=main
-            # always include the git SHA
-            type=sha
 
       - name: Build and push
         uses: docker/build-push-action@v6
