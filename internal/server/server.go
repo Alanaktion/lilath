@@ -30,6 +30,10 @@ func (rw *responseWriter) WriteHeader(status int) {
 func NewServer(addr string, h *Handlers) *http.Server {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	mux.HandleFunc("GET /auth", h.ForwardAuth)
 	mux.HandleFunc("GET /login", h.LoginPage)
 	mux.HandleFunc("POST /login", h.LoginSubmit)

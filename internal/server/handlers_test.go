@@ -110,6 +110,28 @@ func noFollowClient() *http.Client {
 	}
 }
 
+func TestHealthz_GET(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading response body: %v", err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("expected body %q, got %q", "ok", string(body))
+	}
+}
+
 // --------------------------------------------------------------------------
 // GET /auth — forward-auth endpoint
 // --------------------------------------------------------------------------

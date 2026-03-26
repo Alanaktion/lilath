@@ -212,6 +212,12 @@ services:
       # LILATH_SESSION_SECRET: "change-me"
     volumes:
       - ./users.txt:/data/users.txt
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.lilath-login.rule=PathPrefix(`/login`) || PathPrefix(`/logout`)"
@@ -231,12 +237,13 @@ services:
 
 ## Endpoints
 
-| Method     | Path      | Description                               |
-| ---------- | --------- | ----------------------------------------- |
-| `GET`      | `/auth`   | forwardAuth endpoint — returns 200 or 302 |
-| `GET`      | `/login`  | Login page                                |
-| `POST`     | `/login`  | Submit credentials                        |
-| `GET/POST` | `/logout` | Invalidate session                        |
+| Method     | Path       | Description                                   |
+| ---------- | ---------- | --------------------------------------------- |
+| `GET`      | `/healthz` | Healthcheck endpoint — returns 200 when alive |
+| `GET`      | `/auth`    | forwardAuth endpoint — returns 200 or 302     |
+| `GET`      | `/login`   | Login page                                    |
+| `POST`     | `/login`   | Submit credentials                            |
+| `GET/POST` | `/logout`  | Invalidate session                            |
 
 ---
 
@@ -271,8 +278,6 @@ Notes:
 
 - IPs already listed in `ip_allowlist` bypass auth and rate limiting.
 - `rate_limit_allowlist` is useful for internal monitors, health checks, or trusted networks.
-
-### Environment variables
 
 Rate limiting can also be configured with environment variables:
 
