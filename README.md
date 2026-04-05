@@ -56,51 +56,7 @@ docker run -d \
 Place your `config.yaml` and `users.txt` inside the mounted `/data` directory.
 The container runs as a non-root user (`uid 1000`).
 
-### Managing users from outside the container
-
-Because the credentials file is a plain bind-mounted file, you can manage
-users **without entering the running container** by spinning up a temporary
-container that shares the same volume:
-
-```bash
-# Add or update a user (interactive password prompt)
-docker run --rm -it \
-  --entrypoint lilath-adduser \
-  -v $(pwd)/data:/data \
-  lilath \
-  -f /data/users.txt alice
-
-# List all users
-docker run --rm \
-  --entrypoint lilath-adduser \
-  -v $(pwd)/data:/data \
-  lilath \
-  -f /data/users.txt -list
-
-# Delete a user
-docker run --rm \
-  --entrypoint lilath-adduser \
-  -v $(pwd)/data:/data \
-  lilath \
-  -f /data/users.txt -delete alice
-```
-
-After writing the file, send `SIGHUP` to the running container so it picks up
-the changes without restarting:
-
-```bash
-docker kill --signal=HUP lilath
-```
-
-If you prefer named Docker volumes instead of bind mounts, use
-`--volumes-from` to share the volume with the temporary container:
-
-```bash
-docker run --rm -it --volumes-from lilath --entrypoint lilath-adduser lilath -f /data/users.txt alice
-docker kill --signal=HUP lilath
-```
-
-### 3. Configure
+### Configure
 
 Configuration can be provided via a YAML file, environment variables, or a
 combination of both. Environment variables always take precedence over the
@@ -130,6 +86,8 @@ Every config option has a corresponding `LILATH_*` environment variable:
 | `LILATH_TRUST_FORWARDED_FOR`| `true`            | Read client IP from `X-Forwarded-For` |
 | `LILATH_LOGIN_TEMPLATE`     | _(empty)_         | Path to a custom HTML login template  |
 | `LILATH_TOKENS_FILE`        | _(empty)_         | Path to a Bearer tokens file (one token per line) |
+| `LILATH_DEFAULT_USERS`      | _(empty)_         | Comma-separated usernames allowed by default; empty allows all |
+| `LILATH_USERS_HEADER`       | `X-Lilath-Users`  | Header carrying per-service allowed usernames |
 | `LILATH_RATE_LIMIT_REQUESTS`| `300`             | Max `GET /auth` requests per IP per window (`0` disables) |
 | `LILATH_RATE_LIMIT_LOGIN`   | `10`              | Max `POST /login` attempts per IP per window (`0` disables) |
 | `LILATH_RATE_LIMIT_WINDOW`  | `60`              | Rate-limit window size in seconds |
@@ -138,11 +96,12 @@ Every config option has a corresponding `LILATH_*` environment variable:
 Boolean variables accept `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`.
 `LILATH_IP_ALLOWLIST` accepts a comma-separated list (e.g. `127.0.0.1,10.0.0.0/8`).
 `LILATH_RATE_LIMIT_ALLOWLIST` also accepts a comma-separated list.
+`LILATH_DEFAULT_USERS` accepts a comma-separated list of usernames (e.g. `alice,bob`).
 When `LILATH_BASE_DOMAIN` is set (for example `example.com`), unauthenticated
 requests are redirected to that domain's `/login` endpoint and session cookies
 are written with domain `.example.com` so they are sent to subdomains.
 
-### 4. Run
+### Run
 
 ```bash
 ./lilath -config config.yaml
@@ -168,6 +127,9 @@ http:
       forwardAuth:
         address: "http://lilath:8080/auth"
         trustForwardHeader: true
+        authRequestHeaders:
+          - "Authorization"
+          - "X-Lilath-Users"
         authResponseHeaders:
           - "X-Auth-User"
 ```
@@ -231,6 +193,7 @@ services:
       - "traefik.http.routers.my-app.middlewares=lilath-auth@docker"
       - "traefik.http.middlewares.lilath-auth.forwardauth.address=http://lilath:8080/auth"
       - "traefik.http.middlewares.lilath-auth.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.lilath-auth.forwardauth.authRequestHeaders=Authorization,X-Lilath-Users"
 ```
 
 ---
@@ -339,8 +302,88 @@ http:
         trustForwardHeader: true
         authRequestHeaders:
           - "Authorization"
+          - "X-Lilath-Users"
         authResponseHeaders:
           - "X-Auth-User"
+```
+
+---
+
+## Per-service user restrictions
+
+By default every authenticated user (or token) can reach every service. You
+can tighten this so that only specific users are permitted on each service —
+without running separate lilath instances.
+
+### How it works
+
+1. Set `default_users` in your config (or `LILATH_DEFAULT_USERS`) to the list
+   of usernames that should be allowed on services with no explicit override.
+   Leave it empty to allow all authenticated users (the backward-compatible default).
+2. Add `X-Lilath-Users` to the `authRequestHeaders` list of the `lilath-auth`
+   forwardAuth middleware so Traefik forwards it to lilath.
+3. On any service where you want a different set of users, attach a Traefik
+   `headers` middleware that sets `X-Lilath-Users` to a comma-separated list of
+   allowed usernames. Use `*` to allow every authenticated user on that service.
+
+Token authentication is never restricted by user lists — any valid bearer token
+is allowed on every service regardless of `default_users` or `X-Lilath-Users`.
+
+### Example
+
+Suppose `alice` and `bob` are both in `users.txt`. You want:
+
+- **Most services** — only `alice` (via `default_users`)
+- **Bob's service** — only `bob`
+- **Shared service** — both users
+
+```yaml
+# config.yaml
+default_users:
+  - alice
+```
+
+```yaml
+# docker-compose.yml (labels on the Traefik / lilath service)
+- "traefik.http.middlewares.lilath-auth.forwardauth.address=http://lilath:8080/auth"
+- "traefik.http.middlewares.lilath-auth.forwardauth.authRequestHeaders=Authorization,X-Lilath-Users"
+
+# bob-only service: inject X-Lilath-Users=bob before the auth check
+- "traefik.http.middlewares.bob-only.headers.customRequestHeaders.X-Lilath-Users=bob"
+- "traefik.http.routers.bob-service.middlewares=bob-only,lilath-auth"
+
+# shared service: wildcard overrides default_users, allows everyone
+- "traefik.http.middlewares.all-users.headers.customRequestHeaders.X-Lilath-Users=*"
+- "traefik.http.routers.shared-service.middlewares=all-users,lilath-auth"
+
+# most services: no extra middleware, default_users applies (alice only)
+- "traefik.http.routers.alice-service.middlewares=lilath-auth"
+```
+
+> **Middleware order matters.** The `headers` middleware that injects
+> `X-Lilath-Users` must appear **before** `lilath-auth` in the middleware
+> chain so that Traefik adds the header before forwarding the auth request.
+
+### `X-Lilath-Users` header values
+
+| Value | Meaning |
+|---|---|
+| _(absent)_ | Fall back to `default_users`; if that is also empty, allow all |
+| `alice,bob` | Only `alice` and `bob` are allowed |
+| `*` | All authenticated users are allowed |
+
+### Config reference
+
+```yaml
+# Default allowed usernames when no per-service header is present.
+# Empty (the default) permits all authenticated users.
+default_users:
+  - alice
+
+# Header name carrying the per-service user list.
+# Defaults to "X-Lilath-Users". Change only if that name conflicts with
+# something else in your stack.
+# users_header: "X-Lilath-Users"
 ```
 
 ---

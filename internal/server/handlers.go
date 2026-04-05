@@ -110,6 +110,10 @@ func (h *Handlers) ForwardAuth(w http.ResponseWriter, r *http.Request) {
 	if err == nil && cookie.Value != "" {
 		sess := h.sessions.Get(cookie.Value)
 		if sess != nil {
+			if !h.isUserAllowed(sess.Username, r) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
 			h.sessions.Refresh(cookie.Value)
 			w.Header().Set("X-Auth-User", sess.Username)
 			w.WriteHeader(http.StatusOK)
@@ -236,6 +240,55 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 		Secure:   h.cfg.CookieSecure,
 	})
 	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+// isUserAllowed reports whether username is permitted to access the service
+// indicated by the current request. It first checks for a service-specific
+// user list carried in the configured header (set by a Traefik headers
+// middleware and forwarded via authRequestHeaders). If that header is absent,
+// it falls back to cfg.DefaultUsers. An empty DefaultUsers list means all
+// authenticated users are allowed. The special value "*" in the header means
+// all users are allowed regardless of DefaultUsers.
+func (h *Handlers) isUserAllowed(username string, r *http.Request) bool {
+	headerName := h.cfg.UsersHeader
+	if headerName == "" {
+		headerName = "X-Lilath-Users"
+	}
+
+	if headerVal := strings.TrimSpace(r.Header.Get(headerName)); headerVal != "" {
+		if headerVal == "*" {
+			return true
+		}
+		for _, u := range splitUsers(headerVal) {
+			if u == username {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No service-specific header — apply the default user list.
+	if len(h.cfg.DefaultUsers) == 0 {
+		return true
+	}
+	for _, u := range h.cfg.DefaultUsers {
+		if u == username {
+			return true
+		}
+	}
+	return false
+}
+
+// splitUsers splits a comma-separated list of usernames, trimming whitespace.
+func splitUsers(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if u := strings.TrimSpace(p); u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 func normalizeBaseDomain(base string) string {

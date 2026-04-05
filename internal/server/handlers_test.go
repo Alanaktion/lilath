@@ -1124,3 +1124,302 @@ func TestNewHandlers_InvalidRateLimitAllowlist(t *testing.T) {
 		t.Fatal("expected error for invalid rate limit allowlist, got nil")
 	}
 }
+
+// --------------------------------------------------------------------------
+// User allowlist — per-service and default user restrictions
+// --------------------------------------------------------------------------
+
+// newTestServerWithUsers returns a test server with the given default user list
+// and optional custom users header name.
+func newTestServerWithUsers(t *testing.T, defaultUsers []string, usersHeader string) (*httptest.Server, *auth.SessionStore) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "users.txt")
+	hash, err := auth.HashPassword(testPassword)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := auth.WriteCredentials(path, map[string]string{testUser: hash}); err != nil {
+		t.Fatalf("WriteCredentials: %v", err)
+	}
+	creds, err := auth.LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+
+	cfg := &config.Config{
+		CookieName:        cookieName,
+		CookieSecure:      false,
+		SessionTTL:        60,
+		TrustForwardedFor: false,
+		DefaultUsers:      defaultUsers,
+		UsersHeader:       usersHeader,
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	srv := server.NewServer(":0", h)
+	ts := httptest.NewServer(srv.Handler)
+	t.Cleanup(ts.Close)
+	return ts, sessions
+}
+
+// TestForwardAuth_DefaultUsers_AllowedUser verifies that a user in the default
+// list can access a service with no service-specific header.
+func TestForwardAuth_DefaultUsers_AllowedUser(t *testing.T) {
+	ts, sessions := newTestServerWithUsers(t, []string{testUser}, "")
+	client := noFollowClient()
+
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d for user in default list, got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+// TestForwardAuth_DefaultUsers_DeniedUser verifies that a user NOT in the
+// default list is rejected with 403 even when authenticated.
+func TestForwardAuth_DefaultUsers_DeniedUser(t *testing.T) {
+	ts, sessions := newTestServerWithUsers(t, []string{"other-user"}, "")
+	client := noFollowClient()
+
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected %d for user not in default list, got %d", http.StatusForbidden, resp.StatusCode)
+	}
+}
+
+// TestForwardAuth_DefaultUsers_Empty verifies that an empty default list allows
+// all authenticated users (backward-compatible behavior).
+func TestForwardAuth_DefaultUsers_Empty(t *testing.T) {
+	ts, sessions := newTestServerWithUsers(t, nil, "")
+	client := noFollowClient()
+
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d when no default users configured, got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+// TestForwardAuth_ServiceUsersHeader_AllowedUser verifies that a user listed in
+// the service-specific header is permitted even when not in DefaultUsers.
+func TestForwardAuth_ServiceUsersHeader_AllowedUser(t *testing.T) {
+	ts, sessions := newTestServerWithUsers(t, []string{"other-user"}, "")
+	client := noFollowClient()
+
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	req.Header.Set("X-Lilath-Users", testUser)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d for user in service header, got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+// TestForwardAuth_ServiceUsersHeader_DeniedUser verifies that a user NOT listed
+// in the service-specific header is rejected with 403.
+func TestForwardAuth_ServiceUsersHeader_DeniedUser(t *testing.T) {
+	ts, sessions := newTestServerWithUsers(t, nil, "")
+	client := noFollowClient()
+
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	req.Header.Set("X-Lilath-Users", "other-user")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected %d for user not in service header, got %d", http.StatusForbidden, resp.StatusCode)
+	}
+}
+
+// TestForwardAuth_ServiceUsersHeader_Wildcard verifies that a service-specific
+// header of "*" allows all authenticated users regardless of DefaultUsers.
+func TestForwardAuth_ServiceUsersHeader_Wildcard(t *testing.T) {
+	ts, sessions := newTestServerWithUsers(t, []string{"other-user"}, "")
+	client := noFollowClient()
+
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	req.Header.Set("X-Lilath-Users", "*")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d for wildcard service header, got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+// TestForwardAuth_ServiceUsersHeader_MultipleUsers verifies comma-separated
+// user lists in the service header.
+func TestForwardAuth_ServiceUsersHeader_MultipleUsers(t *testing.T) {
+	ts, sessions := newTestServerWithUsers(t, nil, "")
+	client := noFollowClient()
+
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	req.Header.Set("X-Lilath-Users", "alice, "+testUser+", bob")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d for user in multi-user service header, got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+// TestForwardAuth_ServiceUsersHeader_CustomHeaderName verifies that UsersHeader
+// config uses the configured header name instead of the default.
+func TestForwardAuth_ServiceUsersHeader_CustomHeaderName(t *testing.T) {
+	ts, sessions := newTestServerWithUsers(t, []string{"other-user"}, "X-Custom-Users")
+	client := noFollowClient()
+
+	sid, err := sessions.Create(testUser)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
+	req.Header.Set("X-Custom-Users", testUser)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d for user in custom header, got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+// TestForwardAuth_BearerToken_BypassesUserAllowlist verifies that token auth
+// is never restricted by default_users or the service users header.
+func TestForwardAuth_BearerToken_BypassesUserAllowlist(t *testing.T) {
+	dir := t.TempDir()
+
+	usersPath := filepath.Join(dir, "users.txt")
+	creds, err := auth.LoadCredentials(usersPath)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+
+	tokensPath := filepath.Join(dir, "tokens.txt")
+	if err := os.WriteFile(tokensPath, []byte("secret-token\n"), 0600); err != nil {
+		t.Fatalf("WriteFile tokens: %v", err)
+	}
+	tokenStore, err := auth.LoadTokens(tokensPath)
+	if err != nil {
+		t.Fatalf("LoadTokens: %v", err)
+	}
+
+	cfg := &config.Config{
+		CookieName:        cookieName,
+		CookieSecure:      false,
+		SessionTTL:        60,
+		TrustForwardedFor: false,
+		// No users allowed by default, and service header also restricts.
+		DefaultUsers: []string{"nobody"},
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, tokenStore)
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	srv := server.NewServer(":0", h)
+	ts := httptest.NewServer(srv.Handler)
+	t.Cleanup(ts.Close)
+
+	client := noFollowClient()
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	// Service restricts to a different user — tokens must bypass this.
+	req.Header.Set("X-Lilath-Users", "alice")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d: Bearer token should bypass user allowlist, got %d", http.StatusOK, resp.StatusCode)
+	}
+}

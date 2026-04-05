@@ -28,6 +28,19 @@ type Config struct {
 	// tokens, one per line. Leave empty to disable Bearer token auth.
 	TokensFile string `yaml:"tokens_file"`
 
+	// DefaultUsers is an optional list of usernames allowed to access any
+	// service when no service-specific user list header is present. When
+	// empty, all authenticated users are permitted (backward-compatible
+	// default). Token authentication is never restricted by this list.
+	DefaultUsers []string `yaml:"default_users"`
+	// UsersHeader is the HTTP request header name that carries a
+	// comma-separated list of allowed usernames for the target service.
+	// Services set this via a Traefik headers middleware, and the forwardAuth
+	// middleware must be configured to forward it.
+	// Use the special value "*" to allow all authenticated users regardless of
+	// DefaultUsers. Defaults to "X-Lilath-Users".
+	UsersHeader string `yaml:"users_header"`
+
 	// Rate limiting — per IP, fixed-window counter.
 	// Set a limit to 0 to disable that limiter.
 
@@ -94,6 +107,8 @@ func Load(path string) (*Config, error) {
 //	LILATH_TRUST_FORWARDED_FOR      — "true"/"1"/"yes" or "false"/"0"/"no"
 //	LILATH_LOGIN_TEMPLATE           — e.g. "/data/login.html"
 //	LILATH_TOKENS_FILE              — e.g. "/data/tokens.txt"
+//	LILATH_DEFAULT_USERS            — comma-separated usernames, e.g. "alice,bob"
+//	LILATH_USERS_HEADER             — header name, e.g. "X-Lilath-Users"
 //	LILATH_RATE_LIMIT_REQUESTS      — integer, max GET /auth requests per window per IP (0 = disabled)
 //	LILATH_RATE_LIMIT_LOGIN         — integer, max POST /login attempts per window per IP (0 = disabled)
 //	LILATH_RATE_LIMIT_WINDOW        — integer seconds, rate-limit window size
@@ -135,6 +150,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LILATH_TOKENS_FILE"); v != "" {
 		cfg.TokensFile = v
+	}
+	if v := os.Getenv("LILATH_DEFAULT_USERS"); v != "" {
+		cfg.DefaultUsers = splitList(v)
+	}
+	if v := os.Getenv("LILATH_USERS_HEADER"); v != "" {
+		cfg.UsersHeader = v
 	}
 	if v := os.Getenv("LILATH_RATE_LIMIT_REQUESTS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

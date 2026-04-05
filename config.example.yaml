@@ -40,7 +40,22 @@ trust_forwarded_for: true
 # Optional path to a file of allowed Bearer tokens, one per line.
 # When set, requests with a matching Authorization: Bearer <token> header
 # are authenticated without requiring a login. Leave unset to disable.
+# Token authentication is never restricted by default_users or users_header.
 # tokens_file: "/data/tokens.txt"
+
+# Default list of usernames allowed to access any service when no
+# service-specific user list is provided via the users_header. When empty
+# (the default), all authenticated users are permitted.
+# Example: allow only alice by default, grant bob access per-service.
+# default_users:
+#   - alice
+
+# HTTP request header that carries a comma-separated list of allowed users
+# for a specific service. Services set this via a Traefik headers middleware,
+# and the forwardAuth middleware must forward it via authRequestHeaders.
+# Use "*" as the value to allow all authenticated users for that service.
+# Defaults to "X-Lilath-Users".
+# users_header: "X-Lilath-Users"
 
 # Rate limiting (per IP address, fixed-window counter).
 # Set a limit to 0 to disable that limiter.
