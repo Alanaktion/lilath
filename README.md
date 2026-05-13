@@ -1,14 +1,17 @@
 # lilath
 
 A lil' Go web app that acts as a [Traefik `forwardAuth`][fwd] middleware,
-providing three layers of access control:
+providing four layers of access control:
 
 1. **IP allowlist** — requests from listed IPs (or CIDR ranges) are allowed
    immediately, no login required.
 2. **Bearer token auth** — requests with a valid `Authorization: Bearer <token>`
    header are authenticated without requiring a login page. Tokens are stored in
    a plain text file, one per line.
-3. **Credential auth** — everyone else is redirected to a login page.
+3. **HTTP Basic auth** — requests with a valid `Authorization: Basic <credentials>`
+   header are authenticated against the credentials file. lilath never returns
+   HTTP 401; invalid or missing Basic credentials fall through to the login page.
+4. **Credential auth** — everyone else is redirected to a login page.
    Credentials are stored as bcrypt hashes in a plain text file.
 
 [fwd]: https://doc.traefik.io/traefik/middlewares/http/forwardauth/
@@ -306,6 +309,31 @@ http:
         authResponseHeaders:
           - "X-Auth-User"
 ```
+
+---
+
+## HTTP Basic authentication
+
+Requests carrying an `Authorization: Basic <credentials>` header are
+authenticated directly against the credentials file (the same `username:bcrypt`
+file used by the web login page). This is useful for tools and clients that
+support HTTP Basic auth natively but cannot interact with a browser-based login
+form.
+
+**Important:** lilath never returns HTTP 401. If the Basic credentials are
+absent or invalid, the request falls through to the normal session-cookie check
+and finally to a redirect to the login page. This avoids triggering unwanted
+browser credential dialogs. However, if valid credentials are provided for a
+user that is not permitted by the applicable user allowlist (see
+[Per-service user restrictions](#per-service-user-restrictions)), lilath
+returns HTTP 403 — the same behavior as a session-cookie login for that user.
+
+On success, lilath returns HTTP 200 and sets the `X-Auth-User` response header
+to the authenticated username, which Traefik forwards to the upstream service
+via `authResponseHeaders`.
+
+No additional configuration is required — Basic auth is enabled automatically
+when a credentials file is present.
 
 ---
 

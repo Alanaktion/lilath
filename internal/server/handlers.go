@@ -105,7 +105,21 @@ func (h *Handlers) ForwardAuth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4. Check session cookie.
+	// 4. Check HTTP Basic auth credentials. Never return 401 — if credentials
+	// are absent or invalid, fall through to the session/login flow.
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Basic ") {
+		if username, password, ok := r.BasicAuth(); ok && h.creds.Verify(username, password) {
+			if !h.isUserAllowed(username, r) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("X-Auth-User", username)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
+	// 5. Check session cookie.
 	cookie, err := r.Cookie(h.cfg.CookieName)
 	if err == nil && cookie.Value != "" {
 		sess := h.sessions.Get(cookie.Value)
