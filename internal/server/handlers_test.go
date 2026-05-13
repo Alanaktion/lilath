@@ -451,6 +451,112 @@ func TestForwardAuth_BearerToken_EmptyTokenStore(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// HTTP Basic auth — GET /auth with Authorization: Basic <credentials>
+// --------------------------------------------------------------------------
+
+func TestForwardAuth_BasicAuth_ValidCredentials(t *testing.T) {
+	ts, _ := newTestServer(t)
+	client := noFollowClient()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.SetBasicAuth(testUser, testPassword)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth with Basic auth: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected %d for valid Basic credentials, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Auth-User"); got != testUser {
+		t.Fatalf("expected X-Auth-User %q, got %q", testUser, got)
+	}
+}
+
+func TestForwardAuth_BasicAuth_InvalidPassword(t *testing.T) {
+	ts, _ := newTestServer(t)
+	client := noFollowClient()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.SetBasicAuth(testUser, "wrongpassword")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth with bad Basic password: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Invalid credentials must never return 401; fall through to login redirect.
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected %d for invalid Basic credentials, got %d", http.StatusFound, resp.StatusCode)
+	}
+}
+
+func TestForwardAuth_BasicAuth_UnknownUser(t *testing.T) {
+	ts, _ := newTestServer(t)
+	client := noFollowClient()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.SetBasicAuth("nobody", "password")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth with unknown Basic user: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected %d for unknown Basic user, got %d", http.StatusFound, resp.StatusCode)
+	}
+}
+
+func TestForwardAuth_BasicAuth_DeniedByUserAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	usersPath := filepath.Join(dir, "users.txt")
+	hash, err := auth.HashPassword(testPassword)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := auth.WriteCredentials(usersPath, map[string]string{testUser: hash}); err != nil {
+		t.Fatalf("WriteCredentials: %v", err)
+	}
+	creds, err := auth.LoadCredentials(usersPath)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+
+	cfg := &config.Config{
+		CookieName:   cookieName,
+		SessionTTL:   60,
+		DefaultUsers: []string{"otheruser"}, // testUser is not in the list
+	}
+	sessions := auth.NewSessionStore(cfg.SessionTTL)
+	ipCheck, err := auth.NewIPChecker(nil)
+	if err != nil {
+		t.Fatalf("NewIPChecker: %v", err)
+	}
+	h, err := server.NewHandlers(cfg, creds, sessions, ipCheck, auth.NewTokenStore())
+	if err != nil {
+		t.Fatalf("NewHandlers: %v", err)
+	}
+	srv := server.NewServer(":0", h)
+	ts := httptest.NewServer(srv.Handler)
+	t.Cleanup(ts.Close)
+
+	client := noFollowClient()
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
+	req.SetBasicAuth(testUser, testPassword)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /auth with Basic auth (denied user): %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected %d for Basic auth user denied by allowlist, got %d", http.StatusForbidden, resp.StatusCode)
+	}
+}
+
+// --------------------------------------------------------------------------
 // GET /login — login page
 // --------------------------------------------------------------------------
 
