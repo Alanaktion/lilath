@@ -1,7 +1,7 @@
 # lilath
 
 A lil' Go web app that acts as a [Traefik `forwardAuth`][fwd] middleware,
-providing three layers of access control:
+providing four layers of access control:
 
 1. **IP allowlist** — requests from listed IPs (or CIDR ranges) are allowed
    immediately, no login required.
@@ -321,10 +321,12 @@ support HTTP Basic auth natively but cannot interact with a browser-based login
 form.
 
 **Important:** lilath never returns HTTP 401. If the Basic credentials are
-absent, invalid, or belong to a user that is not in the applicable user
-allowlist, the request falls through to the normal session-cookie check and
-finally to a redirect to the login page. This avoids triggering unwanted
-browser credential dialogs.
+absent or invalid, the request falls through to the normal session-cookie check
+and finally to a redirect to the login page. This avoids triggering unwanted
+browser credential dialogs. However, if valid credentials are provided for a
+user that is not permitted by the applicable user allowlist (see
+[Per-service user restrictions](#per-service-user-restrictions)), lilath
+returns HTTP 403 — the same behavior as a session-cookie login for that user.
 
 On success, lilath returns HTTP 200 and sets the `X-Auth-User` response header
 to the authenticated username, which Traefik forwards to the upstream service
