@@ -23,6 +23,14 @@ type rlEntry struct {
 // NewRateLimiter creates a new rate limiter allowing at most limit requests per
 // window. When limit is 0, Allow always returns true (rate limiting disabled).
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
+	// A negative limit is a misconfiguration; treat it the same as 0 (disabled)
+	// rather than rejecting every request.
+	if limit < 0 {
+		limit = 0
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
 	rl := &RateLimiter{
 		limit:   limit,
 		window:  window,
@@ -34,8 +42,8 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return rl
 }
 
-// Allow reports whether a new request identified by key is within the rate
-// limit. The key is typically a client IP address string.
+// Allow counts a request identified by key and reports whether it is within the
+// rate limit. The key is typically a client IP address string.
 func (rl *RateLimiter) Allow(key string) bool {
 	if rl.limit == 0 {
 		return true
@@ -53,9 +61,59 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return e.count <= rl.limit
 }
 
-// AllowIP is a convenience wrapper that calls Allow with ip.String().
+// Peek reports whether a request for key would be within the rate limit,
+// without counting it. Use it together with Record when only some outcomes of
+// an operation should consume budget (for example, only failed credential
+// checks).
+func (rl *RateLimiter) Peek(key string) bool {
+	if rl.limit == 0 {
+		return true
+	}
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	e, ok := rl.entries[key]
+	if !ok || time.Now().After(e.resetAt) {
+		return true
+	}
+	return e.count < rl.limit
+}
+
+// Record counts a request for key against the limit, ignoring the result.
+func (rl *RateLimiter) Record(key string) {
+	rl.Allow(key)
+}
+
+// AllowIP is a convenience wrapper that calls Allow with the limiter key for ip.
 func (rl *RateLimiter) AllowIP(ip net.IP) bool {
-	return rl.Allow(ip.String())
+	return rl.Allow(Key(ip))
+}
+
+// PeekIP is a convenience wrapper that calls Peek with the limiter key for ip.
+func (rl *RateLimiter) PeekIP(ip net.IP) bool {
+	return rl.Peek(Key(ip))
+}
+
+// RecordIP is a convenience wrapper that calls Record with the limiter key for ip.
+func (rl *RateLimiter) RecordIP(ip net.IP) {
+	rl.Record(Key(ip))
+}
+
+// Key returns the rate-limit bucket for an IP address. IPv4 addresses get their
+// own bucket; IPv6 addresses are grouped by /64 prefix, because a single client
+// is routinely handed a whole /64 (or larger) and would otherwise be able to
+// sidestep the limit entirely by using a fresh address per request.
+func Key(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	if v6 := ip.To16(); v6 != nil {
+		return v6.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	}
+	return ip.String()
 }
 
 // cleanupLoop removes expired entries periodically to prevent unbounded memory

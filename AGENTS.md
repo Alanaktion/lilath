@@ -1,4 +1,4 @@
-# Copilot Instructions
+# Agent Instructions
 
 ## Build & Test
 
@@ -27,12 +27,24 @@ There are two binaries:
 - **`lilath`** — the main HTTP server (`main.go` → `internal/server`, `internal/auth`, `internal/config`)
 - **`lilath-adduser`** — CLI tool to manage the credentials file (`cmd/adduser`)
 
-**Auth flow in `GET /auth`** (in priority order):
+**Auth flow in `/auth`** (in priority order):
 1. IP allowlist → allow immediately, skip rate limiting
 2. Rate limiter → 429 if exceeded (unless IP is in rate-limit allowlist)
 3. Bearer token (`Authorization: Bearer <token>`) → allow if in tokens file
-4. Session cookie → allow and refresh if valid
-5. Not authenticated → redirect to `/login?rd=<original-uri>`
+4. Basic auth (`Authorization: Basic <credentials>`) → allow if valid; failures
+   are charged to the login rate limiter, never 401
+5. Session cookie → allow and refresh if valid and the user still exists
+6. Not authenticated → redirect to `/login?rd=<original-uri>`
+
+**Security invariants** (see the README "Security notes" section):
+- The client IP comes from `auth.ClientIP`, which walks `X-Forwarded-For` from the
+  right and skips `trusted_proxies`. Never use the leftmost entry — it is
+  client-supplied.
+- Redirect targets (`rd`) and `X-Forwarded-Host` are client-controlled and must go
+  through `sanitizeRedirect` / `forwardedHost` before they reach a `Location`
+  header.
+- `/auth` is registered for all methods so a proxy configured to preserve the
+  request method does not get a 405.
 
 **Package layout:**
 - `internal/config` — YAML config + `LILATH_*` env var overlay (env always wins)

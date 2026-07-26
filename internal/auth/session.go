@@ -66,10 +66,16 @@ func (s *SessionStore) Create(username string) (string, error) {
 }
 
 // Get retrieves a session by ID. Returns nil if the session does not exist or
-// has expired.
+// has expired. The returned Session is a copy: the stored value is only ever
+// read or written while holding the lock, so concurrent Refresh calls cannot
+// race with callers inspecting the result.
 func (s *SessionStore) Get(id string) *Session {
 	s.mu.RLock()
-	sess, ok := s.sessions[id]
+	stored, ok := s.sessions[id]
+	var sess Session
+	if ok {
+		sess = *stored
+	}
 	s.mu.RUnlock()
 	if !ok {
 		return nil
@@ -78,7 +84,7 @@ func (s *SessionStore) Get(id string) *Session {
 		s.Delete(id)
 		return nil
 	}
-	return sess
+	return &sess
 }
 
 // Refresh extends the session expiry by the store TTL.

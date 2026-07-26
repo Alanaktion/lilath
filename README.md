@@ -81,7 +81,7 @@ Every config option has a corresponding `LILATH_*` environment variable:
 | `LILATH_LISTEN_ADDR`        | `:8080`           | Address/port to bind                  |
 | `LILATH_CREDENTIALS_FILE`   | `users.txt`       | Path to credentials file              |
 | `LILATH_IP_ALLOWLIST`       | _(empty)_         | Comma-separated IPs/CIDRs that skip auth |
-| `LILATH_SESSION_SECRET`     | _(empty)_         | Optional session signing secret       |
+| `LILATH_TRUSTED_PROXIES`    | _(empty)_         | Comma-separated IPs/CIDRs of the proxies in front of lilath |
 | `LILATH_SESSION_TTL_MINUTES`| `60`              | Session lifetime in minutes           |
 | `LILATH_COOKIE_NAME`        | `lilath_session`  | Session cookie name                   |
 | `LILATH_BASE_DOMAIN`        | _(empty)_         | Optional base domain for login/cookie sharing across subdomains |
@@ -91,6 +91,7 @@ Every config option has a corresponding `LILATH_*` environment variable:
 | `LILATH_TOKENS_FILE`        | _(empty)_         | Path to a Bearer tokens file (one token per line) |
 | `LILATH_DEFAULT_USERS`      | _(empty)_         | Comma-separated usernames allowed by default; empty allows all |
 | `LILATH_USERS_HEADER`       | `X-Lilath-Users`  | Header carrying per-service allowed usernames |
+| `LILATH_USERS_HEADER_SECRET`| _(empty)_         | Shared secret required to prefix the users header value |
 | `LILATH_RATE_LIMIT_REQUESTS`| `300`             | Max `GET /auth` requests per IP per window (`0` disables) |
 | `LILATH_RATE_LIMIT_LOGIN`   | `10`              | Max `POST /login` attempts per IP per window (`0` disables) |
 | `LILATH_RATE_LIMIT_WINDOW`  | `60`              | Rate-limit window size in seconds |
@@ -174,7 +175,7 @@ services:
       LILATH_TRUST_FORWARDED_FOR: "true"
       LILATH_SESSION_TTL_MINUTES: "60"
       # LILATH_IP_ALLOWLIST: "10.0.0.0/8,192.168.0.0/16"
-      # LILATH_SESSION_SECRET: "change-me"
+      # LILATH_TRUSTED_PROXIES: "172.16.0.0/12"
     volumes:
       - ./users.txt:/data/users.txt
     healthcheck:
@@ -206,7 +207,7 @@ services:
 | Method     | Path       | Description                                   |
 | ---------- | ---------- | --------------------------------------------- |
 | `GET`      | `/healthz` | Healthcheck endpoint — returns 200 when alive |
-| `GET`      | `/auth`    | forwardAuth endpoint — returns 200 or 302     |
+| _(any)_    | `/auth`    | forwardAuth endpoint — returns 200 or 302     |
 | `GET`      | `/login`   | Login page                                    |
 | `POST`     | `/login`   | Submit credentials                            |
 | `GET/POST` | `/logout`  | Invalidate session                            |
@@ -335,6 +336,11 @@ via `authResponseHeaders`.
 No additional configuration is required — Basic auth is enabled automatically
 when a credentials file is present.
 
+Because Basic credentials are password guesses, **failed** attempts count against
+`rate_limit_login_requests` (the login limiter) rather than the much larger
+`rate_limit_requests`. Successful requests are not counted, so a client that
+sends Basic credentials on every request is unaffected.
+
 ---
 
 ## Per-service user restrictions
@@ -392,6 +398,54 @@ default_users:
 > `X-Lilath-Users` must appear **before** `lilath-auth` in the middleware
 > chain so that Traefik adds the header before forwarding the auth request.
 
+### ⚠️ The users header is only as trustworthy as your proxy config
+
+lilath receives `X-Lilath-Users` as an ordinary request header and **cannot tell
+a value injected by your `headers` middleware from one the client sent itself**.
+On any router that does *not* attach a `headers` middleware, a client can send
+`X-Lilath-Users: *` and escape `default_users` — not past authentication, but
+past your per-service segmentation.
+
+Pick one of these if you rely on `default_users`:
+
+**Option A — require a shared secret (recommended).** Set `users_header_secret`
+and prefix every header value with it, separated by a space. Values without the
+correct secret are ignored, so lilath falls back to `default_users`.
+
+```yaml
+# config.yaml
+users_header_secret: "a-long-random-string"
+```
+
+```yaml
+# and in each headers middleware
+- "traefik.http.middlewares.bob-only.headers.customRequestHeaders.X-Lilath-Users=a-long-random-string bob"
+```
+
+**Option B — strip the header at the edge.** Delete any client-supplied value on
+the entrypoint (Traefik removes a header when the custom value is empty), before
+per-router middlewares set their own:
+
+```yaml
+# traefik static config
+entryPoints:
+  websecure:
+    http:
+      middlewares:
+        - strip-lilath-users@file
+
+# traefik dynamic config
+http:
+  middlewares:
+    strip-lilath-users:
+      headers:
+        customRequestHeaders:
+          X-Lilath-Users: ""
+```
+
+lilath logs a warning at startup when `default_users` is set without
+`users_header_secret`.
+
 ### `X-Lilath-Users` header values
 
 | Value | Meaning |
@@ -399,6 +453,7 @@ default_users:
 | _(absent)_ | Fall back to `default_users`; if that is also empty, allow all |
 | `alice,bob` | Only `alice` and `bob` are allowed |
 | `*` | All authenticated users are allowed |
+| `<secret> alice,bob` | Required form when `users_header_secret` is set; a missing or wrong secret is treated as absent |
 
 ### Config reference
 
@@ -412,6 +467,11 @@ default_users:
 # Defaults to "X-Lilath-Users". Change only if that name conflicts with
 # something else in your stack.
 # users_header: "X-Lilath-Users"
+
+# Shared secret that must prefix the users header value, separated by a space.
+# Without it, a client can send the header itself. Strongly recommended
+# whenever default_users is set.
+# users_header_secret: "a-long-random-string"
 ```
 
 ---
@@ -498,3 +558,83 @@ services:
 The `:ro` flag makes the bind mount read-only inside the container.
 Changes to `login.html` on the host take effect the next time the container
 is restarted (the template is read once at startup).
+
+Login responses are sent with `Cache-Control: no-store`, `X-Frame-Options: DENY`
+and a `Content-Security-Policy`. The built-in page gets a deny-by-default policy;
+a custom template gets only `form-action 'self'; frame-ancestors 'none'`, so it
+can load its own assets while still refusing to be framed.
+
+---
+
+## Security notes
+
+lilath is the gate in front of everything behind it, so a few of its defaults
+deserve to be understood rather than assumed.
+
+### Client IP determination
+
+The IP allowlist and every rate limiter act on one address per request, and how
+that address is chosen matters: getting it wrong means either a bypass of the
+allowlist or a bypass of the limits.
+
+With `trust_forwarded_for: true` (the default), lilath reads
+`X-Forwarded-For` — but proxies *append* to that header rather than replacing
+it, so its leftmost entry is whatever the client sent. lilath therefore walks the
+header from the **right**, skipping addresses listed in `trusted_proxies`, and
+uses the first address that remains. A client that sends
+`X-Forwarded-For: 10.0.0.5` cannot claim to be on your internal network.
+
+Set `trusted_proxies` to the addresses of the proxies in front of lilath:
+
+```yaml
+trust_forwarded_for: true
+trusted_proxies:
+  - "172.16.0.0/12"   # the Docker network Traefik runs on
+```
+
+With `trusted_proxies` set, forwarding headers are ignored entirely unless the
+connection comes from one of those addresses — so nothing changes even if
+lilath's port becomes reachable directly. lilath logs a warning at startup when
+`trust_forwarded_for` is enabled and `trusted_proxies` is empty.
+
+If your proxy chain has more than one hop (a CDN in front of Traefik, say), list
+every hop; otherwise the address lilath sees is the nearest proxy's, which will
+simply fail to match your allowlist rather than allow anything unintended.
+
+### Redirect targets
+
+The `rd` parameter is client-controlled, so lilath only ever redirects to a
+root-relative path, to the configured `base_domain` and its subdomains, or to the
+host the request arrived on. Anything else falls back to `/`. `X-Forwarded-Host`
+is validated the same way before it is used to build a login URL.
+
+### Sessions
+
+Sessions live in memory, are keyed by 256 bits of `crypto/rand`, and are lost on
+restart. Every `/auth` hit re-checks that the session's user still exists in the
+credentials file, so deleting a user and reloading (`SIGHUP`) ends their session
+immediately rather than leaving it valid until it expires.
+
+### Rate limiting and passwords
+
+Failed HTTP Basic credentials on `/auth` are charged to the **login** limiter
+(`rate_limit_login_requests`), not the general one, so Basic auth is not a
+higher-throughput channel for password guessing. Successful Basic requests are
+not charged, so legitimate clients that authenticate on every request keep
+working. IPv6 clients are bucketed by `/64` rather than by individual address.
+
+Password verification is bcrypt, which is deliberately slow; unknown usernames
+are compared against a dummy hash so response timing does not reveal which
+usernames exist.
+
+### What lilath does not do
+
+- It does not terminate TLS. Run it behind a proxy that does, and keep
+  `cookie_secure: true` so session cookies are never sent in the clear.
+- It does not authenticate the proxy itself. Only your reverse proxy should be
+  able to reach lilath's port; do not publish it.
+- Bearer tokens are not restricted by `default_users` or the users header. Any
+  valid token is accepted for every service.
+- The credentials and tokens files are secrets. Mount them read-only where
+  possible and keep them out of version control (`.gitignore` covers
+  `users.txt` and `config.yaml`).

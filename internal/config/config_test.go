@@ -37,7 +37,6 @@ func TestLoad_Defaults(t *testing.T) {
 func TestLoad_EnvOverridesDefaults(t *testing.T) {
 	t.Setenv("LILATH_LISTEN_ADDR", ":9090")
 	t.Setenv("LILATH_CREDENTIALS_FILE", "/custom/users.txt")
-	t.Setenv("LILATH_SESSION_SECRET", "mysecret")
 	t.Setenv("LILATH_SESSION_TTL_MINUTES", "120")
 	t.Setenv("LILATH_COOKIE_NAME", "my_cookie")
 	t.Setenv("LILATH_BASE_DOMAIN", "example.com")
@@ -55,9 +54,6 @@ func TestLoad_EnvOverridesDefaults(t *testing.T) {
 	}
 	if cfg.CredentialsFile != "/custom/users.txt" {
 		t.Errorf("CredentialsFile: got %q, want %q", cfg.CredentialsFile, "/custom/users.txt")
-	}
-	if cfg.SessionSecret != "mysecret" {
-		t.Errorf("SessionSecret: got %q, want %q", cfg.SessionSecret, "mysecret")
 	}
 	if cfg.SessionTTL != 120 {
 		t.Errorf("SessionTTL: got %d, want 120", cfg.SessionTTL)

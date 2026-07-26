@@ -13,7 +13,6 @@ type Config struct {
 	ListenAddr      string   `yaml:"listen_addr"`
 	CredentialsFile string   `yaml:"credentials_file"`
 	IPAllowlist     []string `yaml:"ip_allowlist"`
-	SessionSecret   string   `yaml:"session_secret"`
 	SessionTTL      int      `yaml:"session_ttl_minutes"`
 	CookieName      string   `yaml:"cookie_name"`
 	BaseDomain      string   `yaml:"base_domain"`
@@ -21,6 +20,12 @@ type Config struct {
 	// TrustForwardedFor controls whether to trust X-Forwarded-For headers.
 	// Enable this when running behind a trusted reverse proxy like Traefik.
 	TrustForwardedFor bool `yaml:"trust_forwarded_for"`
+	// TrustedProxies is an optional list of IPs/CIDRs belonging to the reverse
+	// proxies in front of lilath. When set, forwarding headers are only honoured
+	// on connections from these addresses, and any of these addresses appearing
+	// in X-Forwarded-For is skipped when determining the client IP. Setting this
+	// is strongly recommended whenever trust_forwarded_for is enabled.
+	TrustedProxies []string `yaml:"trusted_proxies"`
 	// LoginTemplate is an optional path to a custom HTML template file that
 	// replaces the built-in login page. Leave empty to use the default.
 	LoginTemplate string `yaml:"login_template"`
@@ -40,6 +45,16 @@ type Config struct {
 	// Use the special value "*" to allow all authenticated users regardless of
 	// DefaultUsers. Defaults to "X-Lilath-Users".
 	UsersHeader string `yaml:"users_header"`
+	// UsersHeaderSecret, when set, is a shared secret that must prefix the
+	// users header value, separated from the user list by a space:
+	//
+	//	X-Lilath-Users: <secret> alice,bob
+	//
+	// lilath cannot otherwise tell a header injected by a proxy middleware from
+	// one sent by the client, so without a secret any client can widen its own
+	// access by sending the header itself. Values missing or carrying the wrong
+	// secret are ignored, falling back to DefaultUsers.
+	UsersHeaderSecret string `yaml:"users_header_secret"`
 
 	// Rate limiting — per IP, fixed-window counter.
 	// Set a limit to 0 to disable that limiter.
@@ -78,6 +93,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			applyEnv(cfg)
+			normalize(cfg)
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("reading config file: %w", err)
@@ -88,7 +104,30 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyEnv(cfg)
+	normalize(cfg)
 	return cfg, nil
+}
+
+// normalize repairs values that are out of range. A non-positive session TTL
+// would expire every session the instant it was created, and a non-positive
+// rate-limit window would make the window meaningless, so both fall back to
+// their defaults rather than silently breaking authentication.
+func normalize(cfg *Config) {
+	d := defaults()
+	if cfg.SessionTTL <= 0 {
+		fmt.Fprintf(os.Stderr, "lilath: session_ttl_minutes must be positive, using %d\n", d.SessionTTL)
+		cfg.SessionTTL = d.SessionTTL
+	}
+	if cfg.RateLimitWindowSeconds <= 0 {
+		fmt.Fprintf(os.Stderr, "lilath: rate_limit_window_seconds must be positive, using %d\n", d.RateLimitWindowSeconds)
+		cfg.RateLimitWindowSeconds = d.RateLimitWindowSeconds
+	}
+	if cfg.RateLimitRequests < 0 {
+		cfg.RateLimitRequests = 0
+	}
+	if cfg.RateLimitLoginRequests < 0 {
+		cfg.RateLimitLoginRequests = 0
+	}
 }
 
 // applyEnv overlays LILATH_* environment variables on top of cfg.
@@ -99,7 +138,7 @@ func Load(path string) (*Config, error) {
 //	LILATH_LISTEN_ADDR              — e.g. ":8080"
 //	LILATH_CREDENTIALS_FILE         — e.g. "/data/users.txt"
 //	LILATH_IP_ALLOWLIST             — comma-separated IPs/CIDRs, e.g. "127.0.0.1,10.0.0.0/8"
-//	LILATH_SESSION_SECRET           — arbitrary string
+//	LILATH_TRUSTED_PROXIES          — comma-separated IPs/CIDRs of the proxies in front of lilath
 //	LILATH_SESSION_TTL_MINUTES      — integer, e.g. "60"
 //	LILATH_COOKIE_NAME              — e.g. "lilath_session"
 //	LILATH_BASE_DOMAIN              — e.g. "example.com"
@@ -109,6 +148,7 @@ func Load(path string) (*Config, error) {
 //	LILATH_TOKENS_FILE              — e.g. "/data/tokens.txt"
 //	LILATH_DEFAULT_USERS            — comma-separated usernames, e.g. "alice,bob"
 //	LILATH_USERS_HEADER             — header name, e.g. "X-Lilath-Users"
+//	LILATH_USERS_HEADER_SECRET      — shared secret required to prefix the users header value
 //	LILATH_RATE_LIMIT_REQUESTS      — integer, max GET /auth requests per window per IP (0 = disabled)
 //	LILATH_RATE_LIMIT_LOGIN         — integer, max POST /login attempts per window per IP (0 = disabled)
 //	LILATH_RATE_LIMIT_WINDOW        — integer seconds, rate-limit window size
@@ -123,8 +163,8 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LILATH_IP_ALLOWLIST"); v != "" {
 		cfg.IPAllowlist = splitList(v)
 	}
-	if v := os.Getenv("LILATH_SESSION_SECRET"); v != "" {
-		cfg.SessionSecret = v
+	if v := os.Getenv("LILATH_TRUSTED_PROXIES"); v != "" {
+		cfg.TrustedProxies = splitList(v)
 	}
 	if v := os.Getenv("LILATH_SESSION_TTL_MINUTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -156,6 +196,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LILATH_USERS_HEADER"); v != "" {
 		cfg.UsersHeader = v
+	}
+	if v := os.Getenv("LILATH_USERS_HEADER_SECRET"); v != "" {
+		cfg.UsersHeaderSecret = v
 	}
 	if v := os.Getenv("LILATH_RATE_LIMIT_REQUESTS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

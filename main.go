@@ -30,6 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("loading credentials: %v", err)
 	}
+	warnConfig(cfg, creds)
 
 	sessions := auth.NewSessionStore(cfg.SessionTTL)
 
@@ -68,4 +69,31 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+// warnConfig reports configurations that are accepted but weaken access
+// control, so a typo or a copied snippet does not silently reduce security.
+func warnConfig(cfg *config.Config, creds *auth.Credentials) {
+	if creds.Len() == 0 {
+		log.Printf("warning: no credentials loaded from %q — nobody can log in", cfg.CredentialsFile)
+	}
+	if cfg.TrustForwardedFor && len(cfg.TrustedProxies) == 0 {
+		log.Print("warning: trust_forwarded_for is enabled without trusted_proxies — " +
+			"forwarding headers are accepted from any peer that can reach this port")
+	}
+	if !cfg.CookieSecure {
+		log.Print("warning: cookie_secure is disabled — session cookies will be sent over plain HTTP")
+	}
+	if len(cfg.DefaultUsers) > 0 && cfg.UsersHeaderSecret == "" {
+		log.Printf("warning: default_users is set without users_header_secret — a client that sends "+
+			"%q itself can widen its own access; see the README security notes",
+			usersHeaderName(cfg))
+	}
+}
+
+func usersHeaderName(cfg *config.Config) string {
+	if cfg.UsersHeader != "" {
+		return cfg.UsersHeader
+	}
+	return "X-Lilath-Users"
 }

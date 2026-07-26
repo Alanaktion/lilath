@@ -32,6 +32,14 @@ cookie_secure: true
 # Disable only if lilath is exposed directly to the internet.
 trust_forwarded_for: true
 
+# IPs/CIDRs of the reverse proxies in front of lilath. Strongly recommended
+# whenever trust_forwarded_for is enabled: forwarding headers are then only
+# honoured on connections from these addresses, and these addresses are skipped
+# when picking the client IP out of X-Forwarded-For. Without it, lilath trusts
+# whatever proxy happens to reach it.
+# trusted_proxies:
+#   - "172.16.0.0/12"
+
 # Optional path to a custom HTML login page template.
 # The template receives .RedirectURL (string) and .Error (string) variables.
 # Leave unset to use the built-in login page.
@@ -56,6 +64,13 @@ trust_forwarded_for: true
 # Use "*" as the value to allow all authenticated users for that service.
 # Defaults to "X-Lilath-Users".
 # users_header: "X-Lilath-Users"
+
+# Shared secret that must prefix the users header value, separated by a space
+# (e.g. "my-secret alice,bob"). lilath cannot otherwise tell a header set by a
+# proxy middleware from one sent by the client, so without this any client can
+# send the header itself and escape default_users. Values with a missing or
+# wrong secret are ignored, falling back to default_users.
+# users_header_secret: "a-long-random-string"
 
 # Rate limiting (per IP address, fixed-window counter).
 # Set a limit to 0 to disable that limiter.
