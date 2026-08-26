@@ -562,7 +562,12 @@ is restarted (the template is read once at startup).
 Login responses are sent with `Cache-Control: no-store`, `X-Frame-Options: DENY`
 and a `Content-Security-Policy`. The built-in page gets a deny-by-default policy;
 a custom template gets only `form-action 'self'; frame-ancestors 'none'`, so it
-can load its own assets while still refusing to be framed.
+can load its own assets while still refusing to be framed. When `base_domain`
+is set, `form-action` also lists the base domain and its subdomains, since a
+successful login can redirect to any host `rd` is allowed to target — without
+this, Chrome (unlike Firefox) blocks that redirect because it enforces
+`form-action` against the final destination of a form submission, including
+any server-side redirect that follows it.
 
 ---
 

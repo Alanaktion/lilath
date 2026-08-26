@@ -269,14 +269,37 @@ func (h *Handlers) setLoginHeaders(w http.ResponseWriter) {
 	hdr.Set("X-Frame-Options", "DENY")
 	hdr.Set("X-Content-Type-Options", "nosniff")
 
+	formAction := h.formAction()
+
 	// The built-in page needs nothing but its own inline stylesheet, so it gets a
 	// deny-by-default policy. A custom template may legitimately load its own
 	// assets, so only the framing and form-target restrictions are imposed there.
 	if h.customTmpl {
-		hdr.Set("Content-Security-Policy", "form-action 'self'; frame-ancestors 'none'")
+		hdr.Set("Content-Security-Policy", "form-action "+formAction+"; frame-ancestors 'none'")
 		return
 	}
-	hdr.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	hdr.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action "+formAction+"; frame-ancestors 'none'; base-uri 'none'")
+}
+
+// formAction returns the CSP form-action source list for the login page.
+//
+// The <form> always posts back to its own origin, but a successful login
+// redirects to rd, which sanitizeRedirect allows to be any host under
+// base_domain — not necessarily the host that served the login page. Chrome
+// enforces form-action against the final destination of the navigation a form
+// submission produces, including server-side redirects that follow it, so
+// 'self' alone makes Chrome silently block the post-login redirect whenever
+// it crosses to a sibling subdomain, stranding the user on the login page.
+// Firefox does not apply form-action to redirects at all, which is why this
+// only shows up in Chrome. Listing the base domain and its subdomains here
+// permits exactly the hosts sanitizeRedirect already allows rd to target — it
+// does not widen what a login can redirect to.
+func (h *Handlers) formAction() string {
+	base := normalizeBaseDomain(h.cfg.BaseDomain)
+	if base == "" {
+		return "'self'"
+	}
+	return "'self' " + base + " *." + base
 }
 
 // LoginSubmit handles credential submission.

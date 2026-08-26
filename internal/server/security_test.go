@@ -167,6 +167,47 @@ func TestLoginPage_NeutralizesRedirectInForm(t *testing.T) {
 	}
 }
 
+// TestLoginPage_FormActionAllowsBaseDomainRedirect ensures the login page's
+// CSP form-action directive includes the base domain and its subdomains when
+// base_domain is configured. Without this, Chrome blocks the post-login
+// redirect whenever rd lands on a sibling subdomain, since Chrome (unlike
+// Firefox) enforces form-action against the final destination of a form
+// submission's redirect chain, not just the immediate POST target.
+func TestLoginPage_FormActionAllowsBaseDomainRedirect(t *testing.T) {
+	env := newHandlers(t, &config.Config{BaseDomain: "example.com"})
+
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	rr := httptest.NewRecorder()
+	env.handlers.LoginPage(rr, req)
+	resp := rr.Result()
+	defer resp.Body.Close()
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"'self'", "example.com", "*.example.com"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP form-action missing %q: %q", want, csp)
+		}
+	}
+}
+
+// TestLoginPage_FormActionSelfOnlyWithoutBaseDomain ensures no base domain is
+// configured leaves form-action at a plain 'self', since every redirect target
+// is then necessarily same-host.
+func TestLoginPage_FormActionSelfOnlyWithoutBaseDomain(t *testing.T) {
+	env := newHandlers(t, &config.Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	rr := httptest.NewRecorder()
+	env.handlers.LoginPage(rr, req)
+	resp := rr.Result()
+	defer resp.Body.Close()
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "form-action 'self';") {
+		t.Errorf("CSP form-action = %q, want plain 'self'", csp)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Forwarded host / proto handling
 // --------------------------------------------------------------------------
