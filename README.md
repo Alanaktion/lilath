@@ -210,7 +210,7 @@ services:
 | _(any)_    | `/auth`    | forwardAuth endpoint — returns 200 or 302     |
 | `GET`      | `/login`   | Login page                                    |
 | `POST`     | `/login`   | Submit credentials                            |
-| `GET/POST` | `/logout`  | Invalidate session                            |
+| `POST`     | `/logout`  | Invalidate session                            |
 
 ---
 
@@ -597,10 +597,21 @@ trusted_proxies:
   - "172.16.0.0/12"   # the Docker network Traefik runs on
 ```
 
-With `trusted_proxies` set, forwarding headers are ignored entirely unless the
+With `trusted_proxies` set, these client-IP headers are ignored entirely unless the
 connection comes from one of those addresses — so nothing changes even if
 lilath's port becomes reachable directly. lilath logs a warning at startup when
 `trust_forwarded_for` is enabled and `trusted_proxies` is empty.
+
+Note where the trust boundary lies: these settings gate the headers that
+identify the client (`X-Forwarded-For`, `X-Real-Ip`) — the ones the allowlist
+and the rate limiters act on. The headers used to build login redirects
+(`X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-Uri`) are validated
+instead of trust-gated (see "Redirect targets" below): the host must be
+syntactically valid and belong to `base_domain` or the request's own host, the
+scheme is restricted to http/https, and the URI must be a root-relative path.
+A forged value therefore cannot produce an off-site redirect — it can only
+affect the forger's own requests, since a browser never sends these headers
+on another site's behalf.
 
 If your proxy chain has more than one hop (a CDN in front of Traefik, say), list
 every hop; otherwise the address lilath sees is the nearest proxy's, which will

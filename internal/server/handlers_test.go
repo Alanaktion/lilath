@@ -758,28 +758,19 @@ func TestLoginSubmit_RedirectsToRd(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// GET /logout and POST /logout
+// POST /logout (GET was removed: destroying a session is state-changing, and
+// a GET route would let any third-party page log the user out with a
+// top-level navigation, since SameSite=Lax cookies are sent on those)
 // --------------------------------------------------------------------------
 
-func TestLogout_GET(t *testing.T) {
+func TestLogout_GETNotAllowed(t *testing.T) {
 	ts, _ := newTestServer(t)
 	client := noFollowClient()
 
 	cookie := login(t, ts)
 
-	// Confirm session is active.
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
-	req.AddCookie(cookie)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("GET /auth before logout: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected authenticated before logout, got %d", resp.StatusCode)
-	}
-
-	// Logout.
+	// A cross-site top-level navigation can issue a GET, so it must not
+	// destroy the session.
 	logoutReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/logout", nil)
 	logoutReq.AddCookie(cookie)
 	logoutResp, err := client.Do(logoutReq)
@@ -787,20 +778,20 @@ func TestLogout_GET(t *testing.T) {
 		t.Fatalf("GET /logout: %v", err)
 	}
 	logoutResp.Body.Close()
-	if logoutResp.StatusCode != http.StatusFound {
-		t.Fatalf("expected %d, got %d", http.StatusFound, logoutResp.StatusCode)
+	if logoutResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected %d, got %d", http.StatusMethodNotAllowed, logoutResp.StatusCode)
 	}
 
-	// Session should now be invalid.
+	// Session should still be valid.
 	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth", nil)
 	authReq.AddCookie(cookie)
 	authResp, err := client.Do(authReq)
 	if err != nil {
-		t.Fatalf("GET /auth after logout: %v", err)
+		t.Fatalf("GET /auth after GET /logout: %v", err)
 	}
 	authResp.Body.Close()
-	if authResp.StatusCode != http.StatusFound {
-		t.Fatalf("expected unauthenticated after logout, got %d", authResp.StatusCode)
+	if authResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected session to survive GET /logout, got %d", authResp.StatusCode)
 	}
 }
 
@@ -840,11 +831,11 @@ func TestLogout_ClearsCookie(t *testing.T) {
 
 	cookie := login(t, ts)
 
-	logoutReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/logout", nil)
+	logoutReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/logout", nil)
 	logoutReq.AddCookie(cookie)
 	resp, err := client.Do(logoutReq)
 	if err != nil {
-		t.Fatalf("GET /logout: %v", err)
+		t.Fatalf("POST /logout: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -896,7 +887,7 @@ func TestLogout_ClearsCookieDomainWithBaseDomain(t *testing.T) {
 		t.Fatalf("NewHandlers: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/logout", nil)
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	req.AddCookie(&http.Cookie{Name: cookieName, Value: sid})
 	rr := httptest.NewRecorder()
 

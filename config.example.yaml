@@ -33,10 +33,12 @@ cookie_secure: true
 trust_forwarded_for: true
 
 # IPs/CIDRs of the reverse proxies in front of lilath. Strongly recommended
-# whenever trust_forwarded_for is enabled: forwarding headers are then only
-# honoured on connections from these addresses, and these addresses are skipped
-# when picking the client IP out of X-Forwarded-For. Without it, lilath trusts
-# whatever proxy happens to reach it.
+# whenever trust_forwarded_for is enabled: the client-IP headers
+# (X-Forwarded-For, X-Real-Ip) are then only honoured on connections from
+# these addresses, and these addresses are skipped when picking the client IP
+# out of X-Forwarded-For. Without it, lilath trusts whatever proxy happens to
+# reach it. (X-Forwarded-Host/-Proto/-Uri, used to build login redirects, are
+# validated rather than trust-gated; see the README security notes.)
 # trusted_proxies:
 #   - "172.16.0.0/12"
 

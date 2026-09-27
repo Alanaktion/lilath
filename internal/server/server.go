@@ -41,7 +41,10 @@ func NewServer(addr string, h *Handlers) *http.Server {
 	mux.HandleFunc("/auth", h.ForwardAuth)
 	mux.HandleFunc("GET /login", h.LoginPage)
 	mux.HandleFunc("POST /login", h.LoginSubmit)
-	mux.HandleFunc("GET /logout", h.Logout)
+	// Logout is POST-only: destroying a session is state-changing, and a GET
+	// route would let any third-party page log the user out with a top-level
+	// navigation (SameSite=Lax cookies are sent on those). POST is safe
+	// because Lax cookies are withheld from cross-site form submissions.
 	mux.HandleFunc("POST /logout", h.Logout)
 
 	return &http.Server{
